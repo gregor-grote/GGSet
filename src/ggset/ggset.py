@@ -52,7 +52,6 @@ class GGDir:
         self,
         path: str | Path,
         parent: GGDir | None = None,
-        name: str = "root",
         type_sep_level: int = -1,
         level: int = 0,
     ) -> None:
@@ -61,7 +60,6 @@ class GGDir:
         Args:
             path: Directory represented by this node.
             parent: Parent node, or ``None`` for the root node.
-            name: Human-readable node name. If not root, it must match the directory name.
             type_sep_level: Remaining depth until type-separation nodes are
                 reached (``0`` means this node is type-separation level, ``-1`` means no type-separation).
             level: Depth from the root node.
@@ -69,20 +67,38 @@ class GGDir:
         assert level != 0 or isinstance(
             self, GGSet
         ), "Only the root node can have level 0, and it must be an instance of GGSet."
-        self.path = Path(path)
+        input_path = Path(path)
         self.parent = parent
         self.sub_dirs: List[GGDir] = []
-        self.name = name
         self.type_sep_level = type_sep_level
         self.level = level
+        if self.parent is None:
+            self.rel_path = Path()
+        else:
+            self.rel_path = input_path
         self._build()
+
+    @property
+    def name(self) -> str:
+        """Return the directory name derived from its path."""
+        if self.parent is None:
+            return self.abs_path.name
+        return self.rel_path.name
+
+    @property
+    def abs_path(self) -> Path:
+        """Return the absolute filesystem path for this node."""
+        return self.root.root_path / self.rel_path
 
     def _build(self) -> None:
         """Populate ``sub_dirs`` with subdirectory nodes."""
-        for item in self.path.iterdir():
+        for item in self.abs_path.iterdir():
             if item.is_dir():
                 child = GGDir(
-                    item, parent=self, name=item.name, type_sep_level=self.type_sep_level, level=self.level + 1
+                    self.rel_path / item.name,
+                    parent=self,
+                    type_sep_level=self.type_sep_level,
+                    level=self.level + 1,
                 )
                 self.sub_dirs.append(child)
 
@@ -99,12 +115,11 @@ class GGDir:
             if sub_dir.name == name:
                 return sub_dir
         if force_create:
-            next_path = self.path / name
+            next_path = self.abs_path / name
             next_path.mkdir(exist_ok=True)
             new_child = GGDir(
-                next_path,
+                self.rel_path / name,
                 parent=self,
-                name=name,
                 type_sep_level=self.type_sep_level,
                 level=self.level + 1,
             )
@@ -122,7 +137,7 @@ class GGDir:
                 If ``False``, only include files directly in this node.
         """
         file_paths = []
-        for item in self.path.iterdir():
+        for item in self.abs_path.iterdir():
             if item.is_file():
                 file_paths.append(item)
         if rec:
@@ -162,6 +177,16 @@ class GGDir:
         """Return ``True`` if this node's children are type branches (for example, ``images`` and ``labels``)."""
         return self.level == self.type_sep_level - 1
 
+    @property
+    def data_type(self) -> Optional[GGDir]:
+        """Return the data type of this node"""
+        if self.level == self.type_sep_level:
+            return self
+        elif self.parent is not None:
+            return self.parent.data_type
+        else:
+            return None
+
     @overload
     def get_file(self, filename: str, force_create: Literal[True]) -> GGFile: ...
 
@@ -179,7 +204,7 @@ class GGDir:
             ``GGFile`` if found. If ``force_create`` is ``True``, a ``GGFile``
             is always returned.
         """
-        file_path = self.path / filename
+        file_path = self.abs_path / filename
         if file_path.exists():
             if file_path.is_file():
                 return GGFile(self, filename)
@@ -219,7 +244,7 @@ class GGDir:
             If ``force_create`` is ``True``, a ``GGFile`` is always returned.
         """
         data_level = self.type_sep_level_parent
-        rel_path = cur_file.relative_to(data_level.path)
+        rel_path = cur_file.relative_to(data_level.abs_path)
         try:
             final_GGDir = data_level.get_sub_dir(target_type, force_create=force_create)
         except GGDirNotFoundError:
@@ -259,7 +284,7 @@ class GGDir:
         """
 
         data_level = self.type_sep_level_parent
-        rel_path = cur_file.relative_to(data_level.path)
+        rel_path = cur_file.relative_to(data_level.abs_path)
         try:
             final_GGDir = data_level.get_sub_dir(target_type, force_create=force_create)
         except GGDirNotFoundError:
@@ -277,6 +302,52 @@ class GGDir:
         except GGDirNotFoundError:
             return None
 
+    @overload
+    def get_corresponding_file_for_this_dir(
+        self, target_type: str, extension: str, force_create: Literal[True]
+    ) -> GGFile: ...
+
+    @overload
+    def get_corresponding_file_for_this_dir(
+        self, target_type: str, extension: str, force_create: Literal[False]
+    ) -> GGFile | None: ...
+
+    def get_corresponding_file_for_this_dir(
+        self, target_type: str, extension: str, force_create: bool = False
+    ) -> GGFile | None:
+        """Map this directory to a file in another type branch with the same relative path.
+
+        The relative path below the current type separation-level node is preserved while
+        switching the first branch to ``target_type`` and replacing the directory name
+        with a file of the same name and the specified extension.
+
+        Args:
+            target_type: Target top-level type branch name.
+            extension: New suffix, including leading dot.
+            force_create: If ``True``, create an empty file at the target path if it does not exist.
+        Returns:
+            Matching ``GGFile`` in the target branch if available.
+            If ``force_create`` is ``True``, a ``GGFile`` is always returned.
+        """
+        data_level = self.type_sep_level_parent
+        rel_path = self.abs_path.relative_to(data_level.abs_path)
+        try:
+            final_GGDir = data_level.get_sub_dir(target_type, force_create=force_create)
+        except GGDirNotFoundError:
+            return None
+
+        for part in rel_path.parts[1:]:
+            try:
+                final_GGDir = final_GGDir.get_sub_dir(part, force_create=force_create)
+            except GGDirNotFoundError:
+                return None
+
+        filename = rel_path.parts[-1] + extension
+        try:
+            return final_GGDir.get_file(filename, force_create=force_create)
+        except GGFileNotFoundError:
+            return None
+
     @property
     def root(self) -> GGSet:
         """Return the root node of the current GGDir tree."""
@@ -286,16 +357,9 @@ class GGDir:
             return self
         return self.parent.root
 
-    @property
-    def rel_path(self) -> Path:
-        """Return the path from the root to this node."""
-        if self.parent is None:
-            return Path()
-        return self.path.relative_to(self.root.path)
-
     def get_unique_sub_file_name(self, extension: str) -> str:
         """Generate a unique file name for a new file in this directory."""
-        existing_files = {f.name for f in self.path.iterdir() if f.is_file()}
+        existing_files = {f.name for f in self.abs_path.iterdir() if f.is_file()}
         index = 1
         while True:
             candidate_name = f"{index}{extension}"
@@ -306,7 +370,7 @@ class GGDir:
     def get_new_sub_file(self, extension: str) -> GGFile:
         """Create a new file with a unique name in this directory and return its GGFile."""
         filename = self.get_unique_sub_file_name(extension)
-        file_path = self.path / filename
+        file_path = self.abs_path / filename
         file_path.touch()
         return GGFile(self, filename)
 
@@ -341,7 +405,7 @@ class GGDir:
             yield from child.iterate(data_type, filter_endings, min_layer)
         else:
             if self.level >= min_layer:
-                for item in self.path.iterdir():
+                for item in self.abs_path.iterdir():
                     if item.is_file():
                         if not filter_endings or item.suffix.lower() in filter_endings:
                             yield GGFile(self, item.name)
@@ -368,21 +432,21 @@ class GGDir:
     def write_text_file(self, content: str, name: str | None = None, extension: str = ".txt") -> GGFile:
         """Write text content to a new file with a unique name in this directory."""
         filename = name or self.get_unique_sub_file_name(extension)
-        file_path = self.path / filename
+        file_path = self.abs_path / filename
         file_path.write_text(content)
         return GGFile(self, filename)
 
     def write_image_file(self, image: Any, name: str | None = None, extension: str = ".png") -> GGFile:
         """Write an image to a new file with a unique name in this directory."""
         filename = name or self.get_unique_sub_file_name(extension)
-        file_path = self.path / filename
+        file_path = self.abs_path / filename
         cv2.imwrite(str(file_path), image)
         return GGFile(self, filename)
 
     def print_tree(self, indent: str = "", indent_steps: int = 2, filtered_out: bool = False) -> None:
         """Print the GGDir tree structure starting from this node."""
         ending_counts = {}
-        for item in self.path.iterdir():
+        for item in self.abs_path.iterdir():
             if item.is_file():
                 ending_counts[item.suffix.lower()] = ending_counts.get(item.suffix.lower(), 0) + 1
         if filtered_out:
@@ -398,7 +462,7 @@ class GGDir:
             child.print_tree(indent + " " * indent_steps, indent_steps, filtered_out=not not_filtered)
 
     def __str__(self) -> str:
-        return f"GGDir at '{self.path}'"
+        return f"GGDir at '{self.abs_path}'"
 
     def __repr__(self) -> str:
         return str(self.rel_path)
@@ -408,6 +472,10 @@ class GGSet(GGDir):
     """Root GGDir specialization used as the main user entry point."""
 
     filters: Dict[int, Tuple[str, ...]] = {}
+
+    def __init__(self, path: str | Path, type_sep_level: int = -1) -> None:
+        self.root_path = Path(path).resolve()
+        super().__init__(Path(), parent=None, type_sep_level=type_sep_level, level=0)
 
     def add_filter_allow_only(self, level: int, *allowed_dirs) -> None:
         """Add a filter to only allow certain subdirectories at a given level.
@@ -452,7 +520,7 @@ class GGFile:
 
         Args:
             GGDir: Owning GGDir node.
-            file_name: File name relative to ``GGDir.path``.
+            file_name: File name relative to ``GGDir.abs_path``.
         """
         self.ggdir = GGDir
         self.file_name = file_name
@@ -460,12 +528,12 @@ class GGFile:
     @property
     def abs_path(self) -> Path:
         """Return the absolute path to this file."""
-        return self.ggdir.path / self.file_name
+        return self.ggdir.abs_path / self.file_name
 
     @property
     def rel_path(self) -> Path:
         """Return the path from the GGDir root to this file."""
-        return self.abs_path.relative_to(self.ggdir.root.path)
+        return self.ggdir.rel_path / self.file_name
 
     @overload
     def get_corresponding_file(
@@ -494,6 +562,18 @@ class GGFile:
     def get_corresponding_dir(self, target_type: str, force_create: bool = False) -> GGDir | None:
         """Resolve this file's dataset branch counterpart."""
         return self.ggdir.get_corresponding_dir(self.abs_path, target_type, force_create=force_create)
+
+    @overload
+    def get_corresponding_file_in_same_dir(self, extension: str, force_create: Literal[True]) -> GGFile: ...
+
+    @overload
+    def get_corresponding_file_in_same_dir(
+        self, extension: str, force_create: Literal[False] = False
+    ) -> GGFile | None: ...
+
+    def get_corresponding_file_in_same_dir(self, extension: str, force_create: bool = False) -> GGFile | None:
+        """Resolve this file's counterpart in the same directory but with a different extension."""
+        return self.ggdir.get_file(self.abs_path.with_suffix(extension).name, force_create=force_create)
 
     def read_image(self) -> Any:
         """Read an image file with OpenCV.
@@ -558,14 +638,13 @@ class GGFile:
         """Read the file as a CSV into a pandas DataFrame."""
         return pd.read_csv(self.abs_path)
 
-    def write_annotation_text(self, target_type: str, content: Any, file_extension: str = ".txt") -> None:
-        """Write text content to a file in the target data branch with the same relative path."""
-        target_file = self.get_corresponding_file(target_type, file_extension, force_create=True)
-        if target_file is None:
-            raise ValueError(
-                f"Failed to create or get target file for writing annotation text in data '{target_type}'."
-            )
-        target_file.abs_path.write_text(str(content))
+    def write_text(self, content: str) -> None:
+        """Write text content to the file."""
+        self.abs_path.write_text(content)
+
+    def write_image(self, image: Any) -> None:
+        """Write an image to the file using OpenCV."""
+        cv2.imwrite(str(self.abs_path), image)
 
     def __str__(self) -> str:
         return f"GGFile at '{self.rel_path}'"
@@ -600,7 +679,7 @@ class GGBulkBase(ABC):
 
     def _store_filename(self, ref_file: GGFile, bulk_dir: GGDir) -> str:
         if self.save_rel_paths:
-            return str(ref_file.abs_path.relative_to(bulk_dir.path))
+            return str(ref_file.abs_path.relative_to(bulk_dir.abs_path))
         return str(ref_file.rel_path)
 
     def _normalize_filename(self, filename: str, bulk_dir: GGDir) -> str:
@@ -782,7 +861,7 @@ class GGBulkCsvSingleFile(GGFile, GGBulkCsvBase):
         self.df.to_csv(self.abs_path, index=False)
 
     def read_for_file(self, ref_file: GGFile) -> Optional[Dict[str, Any]]:
-        if not ref_file.abs_path.is_relative_to(self.ggdir.path):
+        if not ref_file.abs_path.is_relative_to(self.ggdir.abs_path):
             raise GGFileNotFoundError(f"File '{ref_file.rel_path}' is not in bulk branch '{self.ggdir.rel_path}'.")
 
         filename = self._store_filename(ref_file, self.ggdir)
@@ -909,7 +988,7 @@ class GGBulkJsonSingleFile(GGFile, GGBulkJsonBase):
         self.abs_path.write_text(json.dumps(self.rows, indent=2, sort_keys=True))
 
     def read_for_file(self, ref_file: GGFile) -> Optional[Dict[str, Any]]:
-        if not ref_file.abs_path.is_relative_to(self.ggdir.path):
+        if not ref_file.abs_path.is_relative_to(self.ggdir.abs_path):
             raise GGFileNotFoundError(f"File '{ref_file.rel_path}' is not in bulk branch '{self.ggdir.rel_path}'.")
 
         filename = self._store_filename(ref_file, self.ggdir)

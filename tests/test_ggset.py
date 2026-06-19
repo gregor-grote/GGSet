@@ -83,6 +83,23 @@ class TestGGDir(unittest.TestCase):
     def tearDown(self) -> None:
         self._tmpdir.cleanup()
 
+    def test_root_path_is_absolute(self):
+        self.assertTrue(self.ggset_1.root_path.is_absolute())
+        self.assertEqual(self.ggset_1.rel_path, Path())
+        self.assertEqual(self.ggset_1.abs_path, self.ggset_1.root_path)
+        self.assertEqual(self.ggset_1.name, self.dataset_1_root.name)
+
+    def test_ggdir_stores_rel_path_from_root(self):
+        data_dir = self.ggset_1.get_sub_dir("data")
+        self.assertEqual(data_dir.name, "data")
+        self.assertEqual(data_dir.rel_path, Path("data"))
+        self.assertEqual(data_dir.abs_path, self.ggset_1.root_path / "data")
+
+        file = data_dir.get_file("file1.txt")
+        assert file is not None
+        self.assertEqual(file.rel_path, Path("data") / "file1.txt")
+        self.assertEqual(file.abs_path, self.ggset_1.root_path / "data" / "file1.txt")
+
     def test_simple_iteration(self):
         r = list(self.ggset_1.iterate("data"))
         self.assertEqual(len(r), 2)
@@ -142,7 +159,7 @@ class TestGGDir(unittest.TestCase):
         ggset = GGSet(small_ggset_root, type_sep_level=1)
         file = ggset.get_sub_dir("data").get_file("file1.txt")
         assert file is not None
-        file.write_annotation_text("labels", "annotation for file1")
+        file.get_corresponding_file("labels", ".txt", force_create=True).write_text("annotation for file1")
         annotation_file = ggset.get_sub_dir("labels").get_file("file1.txt")
         assert annotation_file is not None
         self.assertIsNotNone(annotation_file, "Annotation file was not created.")
@@ -362,6 +379,21 @@ class TestGGDir(unittest.TestCase):
         self.assertIsNotNone(read_image)
         assert read_image is not None
         self.assertTrue(np.array_equal(image, read_image), "The written and read images do not match.")
+
+    def test_get_file_for_dir(self):
+        small_ggset_root = Path(self._tmpdir.name) / "small_GGDir_get_file_for_dir"
+        _write(small_ggset_root / "data" / "db1" / "file1.txt", "1")
+        ggset = GGSet(small_ggset_root, type_sep_level=1)
+        data_dir = ggset.get_sub_dir("data")
+        assert data_dir is not None
+        file_for_dir = data_dir.get_corresponding_file_for_this_dir("labels", ".txt", force_create=True)
+        self.assertEqual(file_for_dir.rel_path.name, "data.txt")
+        self.assertEqual(file_for_dir.rel_path.parent.name, "labels")
+        file_for_dir.write_text("annotation for data dir")
+        annotation_file = ggset.get_sub_dir("labels").get_file("data.txt")
+        self.assertIsNotNone(annotation_file, "Annotation file for data dir was not created.")
+        assert annotation_file is not None
+        self.assertEqual(annotation_file.read_text(), "annotation for data dir")
 
 
 if __name__ == "__main__":
