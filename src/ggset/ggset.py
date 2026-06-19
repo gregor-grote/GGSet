@@ -293,7 +293,7 @@ class GGDir:
             return Path()
         return self.path.relative_to(self.root.path)
 
-    def get_unique_child_file_name(self, extension: str) -> str:
+    def get_unique_sub_file_name(self, extension: str) -> str:
         """Generate a unique file name for a new file in this directory."""
         existing_files = {f.name for f in self.path.iterdir() if f.is_file()}
         index = 1
@@ -302,6 +302,13 @@ class GGDir:
             if candidate_name not in existing_files:
                 return candidate_name
             index += 1
+
+    def get_new_sub_file(self, extension: str) -> GGFile:
+        """Create a new file with a unique name in this directory and return its GGFile."""
+        filename = self.get_unique_sub_file_name(extension)
+        file_path = self.path / filename
+        file_path.touch()
+        return GGFile(self, filename)
 
     def iterate(
         self, data_type: str | None = None, filter_endings: Iterable[str] = (), min_layer: int = 0
@@ -360,9 +367,16 @@ class GGDir:
 
     def write_text_file(self, content: str, name: str | None = None, extension: str = ".txt") -> GGFile:
         """Write text content to a new file with a unique name in this directory."""
-        filename = name or self.get_unique_child_file_name(extension)
+        filename = name or self.get_unique_sub_file_name(extension)
         file_path = self.path / filename
         file_path.write_text(content)
+        return GGFile(self, filename)
+
+    def write_image_file(self, image: Any, name: str | None = None, extension: str = ".png") -> GGFile:
+        """Write an image to a new file with a unique name in this directory."""
+        filename = name or self.get_unique_sub_file_name(extension)
+        file_path = self.path / filename
+        cv2.imwrite(str(file_path), image)
         return GGFile(self, filename)
 
     def print_tree(self, indent: str = "", indent_steps: int = 2, filtered_out: bool = False) -> None:
@@ -584,19 +598,6 @@ class GGBulkBase(ABC):
     def read_for_file(self, ref_file: GGFile) -> Optional[Dict[str, Any]]:
         pass
 
-
-class GGBulkCsvBase(GGBulkBase, ABC):
-    """CSV branch of bulk writers."""
-
-    def __init__(self, name: str, cols: List[str], save_rel_paths: bool = False) -> None:
-        super().__init__(save_rel_paths=save_rel_paths)
-        self.name = name
-        self.cols = cols
-        if not self.cols:
-            self.cols = ["Filename"]
-        if self.cols[0] != "Filename":
-            self.cols.insert(0, "Filename")
-
     def _store_filename(self, ref_file: GGFile, bulk_dir: GGDir) -> str:
         if self.save_rel_paths:
             return str(ref_file.abs_path.relative_to(bulk_dir.path))
@@ -607,6 +608,22 @@ class GGBulkCsvBase(GGBulkBase, ABC):
             return str((bulk_dir.rel_path / Path(filename)).as_posix())
         return filename
 
+
+class GGBulkCsvBase(GGBulkBase, ABC):
+    """CSV branch of bulk writers."""
+
+    def __init__(
+        self, name: str, cols: List[str], save_rel_paths: bool = False, filename_name: str = "Filename"
+    ) -> None:
+        super().__init__(save_rel_paths=save_rel_paths)
+        self.name = name
+        self.cols = cols
+        self.filename_name = filename_name
+        if not self.cols:
+            self.cols = [filename_name]
+        if self.cols[0] != filename_name:
+            self.cols.insert(0, filename_name)
+
     def write_dict_row(self, ref_file: GGFile, data: Dict[str, Any]) -> None:
         values = [data.get(col, "") for col in self.cols[1:]]
         self.write(ref_file, values)
@@ -615,25 +632,22 @@ class GGBulkCsvBase(GGBulkBase, ABC):
         df = self.read_dataframe()
         result = {}
         for _, row in df.iterrows():
-            filename = row["Filename"]
+            filename = row[self.filename_name]
             result[filename] = {col: row[col] for col in self.cols[1:]}
         return result
 
-    def read_for_file(self, ref_file: GGFile) -> Optional[Dict[str, Any]]:
-        df = self.read_dataframe()
-        filename = str(ref_file.rel_path)
-        row = df[df["Filename"] == filename]
-        if row.empty:
-            return None
-        return row.iloc[0].to_dict()  # type: ignore
-
-    def read_row_for_file(self, ref_file: GGFile) -> Optional[Dict[str, Any]]:
-        return self.read_for_file(ref_file)
-
 
 class GGBulkCsvFileCollection(GGBulkCsvBase):
-    def __init__(self, ggset: GGSet, name: str, layer: int, cols: List[str], save_rel_paths: bool = False) -> None:
-        super().__init__(name, cols, save_rel_paths=save_rel_paths)
+    def __init__(
+        self,
+        ggset: GGSet,
+        name: str,
+        layer: int,
+        cols: List[str],
+        save_rel_paths: bool = False,
+        filename_name: str = "Filename",
+    ) -> None:
+        super().__init__(name, cols, save_rel_paths=save_rel_paths, filename_name=filename_name)
         self.ggset = ggset
         self.layer = layer
         self.files: Dict[str, GGBulkCsvSingleFile] = {}
@@ -645,7 +659,11 @@ class GGBulkCsvFileCollection(GGBulkCsvBase):
         filename = str(target_dir.rel_path)
         if filename not in self.files:
             self.files[filename] = GGBulkCsvSingleFile(
-                target_dir, f"{self.name}.csv", self.cols, save_rel_paths=self.save_rel_paths
+                target_dir,
+                f"{self.name}.csv",
+                self.cols,
+                save_rel_paths=self.save_rel_paths,
+                filename_name=self.filename_name,
             )
         self.files[filename].write(ref_file, data)
 
@@ -669,9 +687,60 @@ class GGBulkCsvFileCollection(GGBulkCsvBase):
         for file in self.files.values():
             file.flush()
 
+    def read_for_file(self, ref_file: GGFile) -> Optional[Dict[str, Any]]:
+        self.flush()
+        target_dir = ref_file.ggdir.ancestor_at_level(self.layer - 1)
+        cache_key = str(target_dir.rel_path)
+        bulk_file = self.files.get(cache_key)
+        if bulk_file is None:
+            existing = target_dir.get_file(f"{self.name}.csv")
+            if existing is None:
+                return None
+            bulk_file = GGBulkCsvSingleFile(
+                target_dir,
+                f"{self.name}.csv",
+                self.cols,
+                save_rel_paths=self.save_rel_paths,
+                filename_name=self.filename_name,
+            )
+            self.files[cache_key] = bulk_file
+        return bulk_file.read_for_file(ref_file)
+
+    def read_for_file_eff(self, ref_file: GGFile) -> Optional[Dict[str, str]]:
+        self.flush()
+        target_dir = ref_file.ggdir.ancestor_at_level(self.layer - 1)
+        cache_key = str(target_dir.rel_path)
+        bulk_file = self.files.get(cache_key)
+        if bulk_file is not None:
+            return bulk_file.read_for_file(ref_file)
+
+        existing = target_dir.get_file(f"{self.name}.csv")
+        if existing is None:
+            return None
+        with existing.abs_path.open() as f:
+            header = f.readline().strip().split(",")
+            if header[0] != self.filename_name:
+                raise ValueError(
+                    f"CSV file '{existing.abs_path}' does not have '{self.filename_name}' as the first column, cannot use efficient lookup."
+                )
+            col_indices = {col: idx for idx, col in enumerate(header)}
+            filename_to_find = self._store_filename(ref_file, target_dir)
+            for line in f:
+                row = line.strip().split(",")
+                if row[0] == filename_to_find:
+                    return {col: row[col_indices[col]] for col in self.cols[1:] if col in col_indices}
+        return None
+
 
 class GGBulkCsvSingleFile(GGFile, GGBulkCsvBase):
-    def __init__(self, ggdir: GGDir, file_name: str, cols: List[str], save_rel_paths: bool = False) -> None:
+    def __init__(
+        self,
+        ggdir: GGDir,
+        file_name: str,
+        cols: List[str],
+        save_rel_paths: bool = False,
+        filename_name: str = "Filename",
+    ) -> None:
         if file_name.endswith(".csv"):
             name = file_name[:-4]
         else:
@@ -679,7 +748,7 @@ class GGBulkCsvSingleFile(GGFile, GGBulkCsvBase):
             file_name += ".csv"
 
         GGFile.__init__(self, ggdir, file_name)
-        GGBulkCsvBase.__init__(self, name, cols, save_rel_paths=save_rel_paths)
+        GGBulkCsvBase.__init__(self, name, cols, save_rel_paths=save_rel_paths, filename_name=filename_name)
 
         try:
             self.df = pd.read_csv(self.abs_path)
@@ -696,7 +765,7 @@ class GGBulkCsvSingleFile(GGFile, GGBulkCsvBase):
         if not isinstance(data, list):
             raise TypeError("CSV bulk writers expect list-like row data. Use write_dict_row for dictionary input.")
         filename = self._store_filename(ref_file, self.ggdir)
-        new_row = {"Filename": filename}
+        new_row = {self.filename_name: filename}
         for col, value in zip(self.cols[1:], data):
             new_row[col] = value
         self.df = pd.concat([self.df, pd.DataFrame([new_row])], ignore_index=True)
@@ -704,11 +773,26 @@ class GGBulkCsvSingleFile(GGFile, GGBulkCsvBase):
     def read_dataframe(self) -> pd.DataFrame:
         df = self.df.copy()
         if not df.empty:
-            df["Filename"] = df["Filename"].map(lambda filename: self._normalize_filename(str(filename), self.ggdir))
+            df[self.filename_name] = df[self.filename_name].map(
+                lambda filename: self._normalize_filename(str(filename), self.ggdir)
+            )
         return df
 
     def flush(self) -> None:
         self.df.to_csv(self.abs_path, index=False)
+
+    def read_for_file(self, ref_file: GGFile) -> Optional[Dict[str, Any]]:
+        if not ref_file.abs_path.is_relative_to(self.ggdir.path):
+            raise GGFileNotFoundError(f"File '{ref_file.rel_path}' is not in bulk branch '{self.ggdir.rel_path}'.")
+
+        filename = self._store_filename(ref_file, self.ggdir)
+        row = self.df[self.df[self.filename_name] == filename]
+        if row.empty:
+            return None
+
+        data = row.iloc[0].to_dict()
+        data[self.filename_name] = self._normalize_filename(str(data[self.filename_name]), self.ggdir)
+        return data  # type: ignore
 
 
 class GGBulkJsonBase(GGBulkBase, ABC):
@@ -717,16 +801,6 @@ class GGBulkJsonBase(GGBulkBase, ABC):
     def __init__(self, name: str, save_rel_paths: bool = False) -> None:
         super().__init__(save_rel_paths=save_rel_paths)
         self.name = name
-
-    def _store_filename(self, ref_file: GGFile, bulk_dir: GGDir) -> str:
-        if self.save_rel_paths:
-            return str(ref_file.abs_path.relative_to(bulk_dir.path))
-        return str(ref_file.rel_path)
-
-    def _normalize_filename(self, filename: str, bulk_dir: GGDir) -> str:
-        if self.save_rel_paths:
-            return str((bulk_dir.rel_path / Path(filename)).as_posix())
-        return filename
 
     def write_dict_row(self, ref_file: GGFile, data: Dict[str, Any]) -> None:
         self.write(ref_file, data)
@@ -783,6 +857,19 @@ class GGBulkJsonFileCollection(GGBulkJsonBase):
         for file in self.files.values():
             file.flush()
 
+    def read_for_file(self, ref_file: GGFile) -> Optional[Dict[str, Any]]:
+        self.flush()
+        target_dir = ref_file.ggdir.ancestor_at_level(self.layer - 1)
+        cache_key = str(target_dir.rel_path)
+        bulk_file = self.files.get(cache_key)
+        if bulk_file is None:
+            existing = target_dir.get_file(f"{self.name}.json")
+            if existing is None:
+                return None
+            bulk_file = GGBulkJsonSingleFile(target_dir, f"{self.name}.json", save_rel_paths=self.save_rel_paths)
+            self.files[cache_key] = bulk_file
+        return bulk_file.read_for_file(ref_file)
+
 
 class GGBulkJsonSingleFile(GGFile, GGBulkJsonBase):
     def __init__(self, ggdir: GGDir, file_name: str, save_rel_paths: bool = False) -> None:
@@ -820,3 +907,13 @@ class GGBulkJsonSingleFile(GGFile, GGBulkJsonBase):
 
     def flush(self) -> None:
         self.abs_path.write_text(json.dumps(self.rows, indent=2, sort_keys=True))
+
+    def read_for_file(self, ref_file: GGFile) -> Optional[Dict[str, Any]]:
+        if not ref_file.abs_path.is_relative_to(self.ggdir.path):
+            raise GGFileNotFoundError(f"File '{ref_file.rel_path}' is not in bulk branch '{self.ggdir.rel_path}'.")
+
+        filename = self._store_filename(ref_file, self.ggdir)
+        row = self.rows.get(filename)
+        if row is None:
+            return None
+        return {"Filename": self._normalize_filename(filename, self.ggdir), **row}

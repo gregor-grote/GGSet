@@ -4,6 +4,10 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+import src.ggset.ggset as ggmod
+
+import numpy as np
+import cv2
 
 from src.ggset.ggset import *
 
@@ -193,7 +197,7 @@ class TestGGDir(unittest.TestCase):
         t1_file = ggset.get_sub_dir("train").get_sub_dir("data").get_file("file1.txt")
         assert t1_file is not None
         self.assertEqual(t1_file.read_text(), "1")
-        row = bulk_writer.read_row_for_file(t1_file)
+        row = bulk_writer.read_for_file(t1_file)
         assert row is not None
         self.assertEqual(row["col1"], 1)
         self.assertEqual(row["col2"], 10)
@@ -292,6 +296,72 @@ class TestGGDir(unittest.TestCase):
 
         read_df = bulk_writer.read_dataframe().sort_values("Filename").reset_index(drop=True)
         self.assertEqual(read_df["Filename"].tolist(), ["test/data/file1.txt", "train/data/file1.txt"])
+
+    def test_bulk_single_file_read_for_file_branch_mismatch_raises(self):
+        small_ggset_root = Path(self._tmpdir.name) / "small_GGDir_branch_guard"
+        _write(small_ggset_root / "train" / "data" / "file1.txt", "1")
+        _write(small_ggset_root / "test" / "data" / "file1.txt", "2")
+
+        ggset = GGSet(small_ggset_root, type_sep_level=2)
+
+        csv_writer = ggset.crate_bulk_csv_writer("bulk_data", layer=2, cols=["col1"])
+        for file in ggset.iterate("data"):
+            csv_writer.write_dict_row(file, {"col1": int(file.read_text())})
+        csv_writer.flush()
+
+        train_file = ggset.get_sub_dir("train").get_sub_dir("data").get_file("file1.txt")
+        test_file = ggset.get_sub_dir("test").get_sub_dir("data").get_file("file1.txt")
+        assert train_file is not None
+        assert test_file is not None
+
+        csv_single = ggmod.GGBulkCsvSingleFile(ggset.get_sub_dir("train"), "bulk_data.csv", ["col1"])
+        self.assertIsNotNone(csv_single.read_for_file(train_file))
+        with self.assertRaises(GGFileNotFoundError):
+            csv_single.read_for_file(test_file)
+
+        json_writer = ggset.crate_bulk_json_writer("bulk_json", layer=2)
+        for file in ggset.iterate("data"):
+            json_writer.write_dict_row(file, {"col1": int(file.read_text())})
+        json_writer.flush()
+
+        json_single = ggmod.GGBulkJsonSingleFile(ggset.get_sub_dir("train"), "bulk_json.json")
+        self.assertIsNotNone(json_single.read_for_file(train_file))
+        with self.assertRaises(GGFileNotFoundError):
+            json_single.read_for_file(test_file)
+
+    def test_write_text_from_dir(self):
+        small_ggset_root = Path(self._tmpdir.name) / "small_GGDir_write_from_dir"
+        _write(small_ggset_root / "data" / "file1.txt", "1")
+        ggset = GGSet(small_ggset_root, type_sep_level=1)
+        data_dir = ggset.get_sub_dir("data")
+        assert data_dir is not None
+        new_file = data_dir.write_text_file("new content", name="new_file.txt")
+        self.assertEqual(new_file.read_text(), "new content")
+        self.assertEqual(new_file.rel_path.name, "new_file.txt")
+        self.assertEqual(new_file.rel_path.parent.name, "data")
+
+    def test_write_image_from_dir(self):
+
+        small_ggset_root = Path(self._tmpdir.name) / "small_GGDir_write_image"
+        _write(small_ggset_root / "data" / "file1.txt", "1")
+        ggset = GGSet(small_ggset_root, type_sep_level=1)
+        data_dir = ggset.get_sub_dir("data")
+        assert data_dir is not None
+
+        # Create a simple image using numpy
+        image = np.zeros((10, 10, 3), dtype=np.uint8)
+        image[0:5, 0:5] = [255, 0, 0]  # Red square in top-left
+        image[5:10, 5:10] = [0, 255, 0]  # Green square in bottom-right
+
+        new_file = data_dir.write_image_file(image, name="test_image.png")
+        self.assertEqual(new_file.rel_path.name, "test_image.png")
+        self.assertEqual(new_file.rel_path.parent.name, "data")
+
+        # Read the image back and check its content
+        read_image = cv2.imread(str(new_file.abs_path))
+        self.assertIsNotNone(read_image)
+        assert read_image is not None
+        self.assertTrue(np.array_equal(image, read_image), "The written and read images do not match.")
 
 
 if __name__ == "__main__":
