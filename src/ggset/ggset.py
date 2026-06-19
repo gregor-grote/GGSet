@@ -111,8 +111,16 @@ class GGDir:
         Raises:
             GGDirNotFoundError: If no direct child with ``name`` exists and ``force_create`` is False.
         """
+        if "/" in name:
+            name_parts = name.split("/")
+            name = name_parts[0]
+            further_parts = "/".join(name_parts[1:])
+        else:
+            further_parts = None
         for sub_dir in self.sub_dirs:
             if sub_dir.name == name:
+                if further_parts:
+                    return sub_dir.get_sub_dir(further_parts, force_create=force_create)
                 return sub_dir
         if force_create:
             next_path = self.abs_path / name
@@ -124,6 +132,8 @@ class GGDir:
                 level=self.level + 1,
             )
             self.sub_dirs.append(new_child)
+            if further_parts:
+                return new_child.get_sub_dir(further_parts, force_create=force_create)
             return new_child
         raise GGDirNotFoundError(
             f"Child with name '{name}' not found in '{self.name}', available children: {[sub_dir.name for sub_dir in self.sub_dirs]}"
@@ -204,6 +214,14 @@ class GGDir:
             ``GGFile`` if found. If ``force_create`` is ``True``, a ``GGFile``
             is always returned.
         """
+        if "/" in filename:
+            parts = filename.split("/")
+            dir_parts = "/".join(parts[:-1])
+            filename = parts[-1]
+            t_dir = self.get_sub_dir(dir_parts, force_create=force_create)
+            if t_dir is None:
+                return None
+            return t_dir.get_file(filename, force_create=force_create)
         file_path = self.abs_path / filename
         if file_path.exists():
             if file_path.is_file():

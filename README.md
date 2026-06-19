@@ -115,7 +115,7 @@ for file in ggset.iterate():
 ### Resolve corresponding files
 
 ```python
-image_file = ggset.get_sub_dir("train").get_sub_dir("images").get_file("sample1.png")
+image_file = ggset.get_file("train/images/sample1.png")
 assert image_file is not None
 
 label_file = image_file.get_corresponding_file("labels", ".txt")
@@ -126,7 +126,7 @@ if label_file is not None:
 ### Create missing corresponding files
 
 ```python
-image_file = ggset.get_sub_dir("data").get_file("sample1.png")
+image_file = ggset.get_file("data/sample1.png")
 assert image_file is not None
 
 label_file = image_file.get_corresponding_file("labels", ".txt", force_create=True)
@@ -136,7 +136,7 @@ label_file.write_text("annotation")
 ### Create nested output directories
 
 ```python
-source_file = ggset.get_sub_dir("data").get_file("sample1.txt")
+source_file = ggset.get_file("data/sample1.txt")
 assert source_file is not None
 
 annotation_dir = source_file.get_corresponding_dir("labels", force_create=True)

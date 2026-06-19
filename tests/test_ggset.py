@@ -395,6 +395,26 @@ class TestGGDir(unittest.TestCase):
         assert annotation_file is not None
         self.assertEqual(annotation_file.read_text(), "annotation for data dir")
 
+    def test_get_dir_with_slash_in_name(self):
+        small_ggset_root = Path(self._tmpdir.name) / "small_GGDir_get_dir_with_slash"
+        _write(small_ggset_root / "data" / "db1" / "file1.txt", "1")
+        ggset = GGSet(small_ggset_root, type_sep_level=1)
+        sub_dir = ggset.get_sub_dir("data/db3", force_create=True)
+        self.assertEqual(sub_dir.rel_path, Path("data/db3"))
+        with self.assertRaises(GGDirNotFoundError):
+            ggset.get_sub_dir("data/db4")
+
+    def test_get_file_with_slash_in_name(self):
+        small_ggset_root = Path(self._tmpdir.name) / "small_GGDir_get_file_with_slash"
+        _write(small_ggset_root / "data" / "db1" / "file1.txt", "1")
+        ggset = GGSet(small_ggset_root, type_sep_level=1)
+        file = ggset.get_file("data/db1/file1.txt")
+        self.assertIsNotNone(file)
+        assert file is not None
+        self.assertEqual(file.rel_path, Path("data/db1/file1.txt"))
+        nen_existing_file = ggset.get_file("data/db1/non_existing.txt")
+        self.assertIsNone(nen_existing_file)
+
 
 if __name__ == "__main__":
     unittest.main()
