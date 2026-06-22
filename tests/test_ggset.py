@@ -246,7 +246,7 @@ class TestGGDir(unittest.TestCase):
         _write(small_ggset_root / "test" / "data" / "file2.txt", "4")
 
         ggset = GGSet(small_ggset_root, type_sep_level=2)
-        bulk_writer = ggset.crate_bulk_json_writer("bulk_data", layer=2, cols=["col1", "col2"])
+        bulk_writer = ggset.crate_bulk_json_writer("bulk_data", layer=2)
         for file in ggset.iterate("data"):
             value = int(file.read_text())
             bulk_writer.write_dict_row(file, {"col1": value, "col2": value * 10})
