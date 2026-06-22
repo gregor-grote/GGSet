@@ -37,6 +37,11 @@ GGSet helps you:
 pip install https://github.com/gregor-grote/GGSet
 ```
 
+or 
+```bash
+pip install git+https://github.com/gregor-grote/GGSet.git
+```
+
 
 ## Core Concepts
 

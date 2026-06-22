@@ -451,6 +451,17 @@ class TestGGDir(unittest.TestCase):
         self.assertEqual(payload_overwrite["train/data/file1.txt"]["a"], 10)
         self.assertEqual(payload_overwrite["train/data/file1.txt"]["b"], 2)
 
+    def test_iterate_filter_ending(self):
+        small_ggset_root = Path(self._tmpdir.name) / "small_GGDir_filter_ending"
+        _write(small_ggset_root / "file1.txt", "1")
+        _write(small_ggset_root / "data" / "file2.csv", "2")
+        ggset = GGSet(small_ggset_root, type_sep_level=1)
+        r = list()
+        for item in ggset.iterate(filter_endings=(".txt",)):
+            r.append(item)
+        self.assertEqual(len(r), 1)
+        self.assertEqual(r[0].rel_path.name, "file1.txt")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -452,7 +452,7 @@ class GGDir:
         """Print the GGDir tree structure starting from this node."""
         ending_counts = {}
         for item in self.abs_path.iterdir():
-            if item.is_file():
+            if item.is_file() and len(item.suffix) > 0:
                 ending_counts[item.suffix.lower()] = ending_counts.get(item.suffix.lower(), 0) + 1
         if filtered_out:
             print(f"{indent}{self.name}/ (filtered out)")
