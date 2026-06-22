@@ -453,9 +453,9 @@ class TestGGDir(unittest.TestCase):
 
     def test_iterate_filter_ending(self):
         small_ggset_root = Path(self._tmpdir.name) / "small_GGDir_filter_ending"
-        _write(small_ggset_root / "file1.txt", "1")
+        _write(small_ggset_root / "data" / "dir" / "file1.txt", "1")
         _write(small_ggset_root / "data" / "file2.csv", "2")
-        ggset = GGSet(small_ggset_root, type_sep_level=1)
+        ggset = GGSet(small_ggset_root, type_sep_level=-1)
         r = list()
         for item in ggset.iterate(filter_endings=(".txt",)):
             r.append(item)

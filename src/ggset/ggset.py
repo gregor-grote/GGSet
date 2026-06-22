@@ -414,10 +414,10 @@ class GGDir:
         Yields:
             ``GGFile`` objects matching traversal and filtering criteria.
         """
-        if data_type is None and self.level > self.type_sep_level + 1:
+        if self.type_sep_level > 0 and data_type is None and self.level > self.type_sep_level + 1:
             for child in self.filtered_sub_dirs:
                 yield from child.iterate(data_type, filter_endings, min_layer)
-        elif data_type is not None and self.is_type_sep_level_parent:
+        elif self.type_sep_level > 0 and data_type is not None and self.is_type_sep_level_parent:
             if data_type is None:
                 raise ValueError(f"Data branch name must be provided when iterating over data level '{self.name}'.")
             child = self.get_sub_dir(data_type)
