@@ -448,6 +448,25 @@ class GGDir:
         else:
             return self.parent.ancestor_at_level(target_level)
 
+    def file_count(self, rec: bool = True, filter_endings: tuple[str, ...] | None = None) -> int:
+        """Return the number of files in this node and, optionally, its descendants.
+
+        Args:
+            rec: If ``True``, include files from all descendant nodes.
+                If ``False``, only include files directly in this node.
+            filter_endings: Optional tuple of lowercase suffixes to include
+                (e.g. ``(".jpg"``, ``".txt"``). If empty or ``None``, all files are
+                counted.
+        """
+        count = 0
+        for item in self.abs_path.iterdir():
+            if item.is_file() and (not filter_endings or item.suffix.lower() in filter_endings):
+                count += 1
+        if rec:
+            for sub_dir in self.filtered_sub_dirs:
+                count += sub_dir.file_count(rec=True, filter_endings=filter_endings)
+        return count
+
     def print_tree(self, indent: str = "", indent_steps: int = 2, filtered_out: bool = False) -> None:
         """Print the GGDir tree structure starting from this node."""
         ending_counts = {}

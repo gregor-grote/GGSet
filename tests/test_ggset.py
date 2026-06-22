@@ -462,6 +462,16 @@ class TestGGDir(unittest.TestCase):
         self.assertEqual(len(r), 1)
         self.assertEqual(r[0].rel_path.name, "file1.txt")
 
+    def test_file_count(self):
+        small_ggset_root = Path(self._tmpdir.name) / "small_GGDir_file_count"
+        _write(small_ggset_root / "data" / "dir" / "file1.txt", "1")
+        _write(small_ggset_root / "data" / "file2.csv", "2")
+        ggset = GGSet(small_ggset_root, type_sep_level=-1)
+        self.assertEqual(ggset.file_count(), 2)
+        self.assertEqual(ggset.file_count(filter_endings=(".txt",)), 1)
+        self.assertEqual(ggset.file_count(filter_endings=(".csv",)), 1)
+        self.assertEqual(ggset.file_count(filter_endings=(".json",)), 0)
+
 
 if __name__ == "__main__":
     unittest.main()
