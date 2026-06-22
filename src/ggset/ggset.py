@@ -506,11 +506,8 @@ class GGSet(GGDir):
         """Create a GGBulkCsvFileCollection for writing rows to CSV files across a layer."""
         return GGBulkCsvFileCollection(self, name, layer, cols, save_rel_paths=save_rel_paths)
 
-    def crate_bulk_json_writer(
-        self, name: str, layer: int, cols: List[str] | None = None, save_rel_paths: bool = False
-    ) -> GGBulkJsonFileCollection:
+    def crate_bulk_json_writer(self, name: str, layer: int, save_rel_paths: bool = False) -> GGBulkJsonFileCollection:
         """Create a GGBulkJsonFileCollection for writing rows to JSON files across a layer."""
-        del cols
         return GGBulkJsonFileCollection(self, name, layer, save_rel_paths=save_rel_paths)
 
 
