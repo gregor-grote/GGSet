@@ -826,30 +826,14 @@ class GGBulkCsvFileCollection(GGBulkCsvBase):
             self.files[cache_key] = bulk_file
         return bulk_file.read_for_file(ref_file)
 
-    def read_for_file_eff(self, ref_file: GGFile) -> Optional[Dict[str, str]]:
-        self.flush()
-        target_dir = ref_file.ggdir.ancestor_at_level(self.layer - 1)
-        cache_key = str(target_dir.rel_path)
-        bulk_file = self.files.get(cache_key)
-        if bulk_file is not None:
-            return bulk_file.read_for_file(ref_file)
+    def __enter__(self) -> "GGBulkCsvFileCollection":
+        return self
 
-        existing = target_dir.get_file(f"{self.name}.csv")
-        if existing is None:
-            return None
-        with existing.abs_path.open() as f:
-            header = f.readline().strip().split(",")
-            if header[0] != self.filename_name:
-                raise ValueError(
-                    f"CSV file '{existing.abs_path}' does not have '{self.filename_name}' as the first column, cannot use efficient lookup."
-                )
-            col_indices = {col: idx for idx, col in enumerate(header)}
-            filename_to_find = self._store_filename(ref_file, target_dir)
-            for line in f:
-                row = line.strip().split(",")
-                if row[0] == filename_to_find:
-                    return {col: row[col_indices[col]] for col in self.cols[1:] if col in col_indices}
-        return None
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        self.flush()
+        for file in self.files.values():
+            file.handler.close()
+        self.files.clear()
 
 
 class GGBulkCsvSingleFile(GGFile, GGBulkCsvBase):
@@ -870,49 +854,60 @@ class GGBulkCsvSingleFile(GGFile, GGBulkCsvBase):
         GGFile.__init__(self, ggdir, file_name)
         GGBulkCsvBase.__init__(self, name, cols, save_rel_paths=save_rel_paths, filename_name=filename_name)
 
-        try:
-            self.df = pd.read_csv(self.abs_path)
-        except FileNotFoundError:
-            self.df = pd.DataFrame(columns=self.cols)
-        if len(self.df.columns) == 0:
-            self.df = pd.DataFrame(columns=self.cols)
-        if self.df.columns.tolist() != self.cols:
-            raise ValueError(
-                f"Existing CSV file '{self.abs_path}' has columns {self.df.columns.tolist()} which do not match expected columns {self.cols}."
-            )
+        if not self.abs_path.exists() or self.abs_path.read_text().strip() == "":
+            with self.abs_path.open("w") as f:
+                f.write(",".join(self.cols) + "\n")
+        elif self.abs_path.is_file():
+            with self.abs_path.open() as f:
+                header = f.readline().strip().split(",")
+                if header != self.cols:
+                    raise ValueError(
+                        f"Existing CSV file '{self.abs_path}' has columns {header} which do not match expected columns {self.cols}."
+                    )
+        else:
+            raise ValueError(f"Expected '{self.abs_path}' to be a file, but it is a directory.")
+
+        self.handler = self.abs_path.open("a")
 
     def write(self, ref_file: GGFile, data: Any) -> None:
         if not isinstance(data, list):
             raise TypeError("CSV bulk writers expect list-like row data. Use write_dict_row for dictionary input.")
+        if len(data) != len(self.cols) - 1:
+            raise ValueError(f"Data length {len(data)} does not match expected number of columns {len(self.cols) - 1}.")
         filename = self._store_filename(ref_file, self.ggdir)
-        new_row = {self.filename_name: filename}
-        for col, value in zip(self.cols[1:], data):
-            new_row[col] = value
-        self.df = pd.concat([self.df, pd.DataFrame([new_row])], ignore_index=True)
+        row = [filename] + [str(d) for d in data]
+        self.handler.write(",".join(row) + "\n")
 
     def read_dataframe(self) -> pd.DataFrame:
-        df = self.df.copy()
-        if not df.empty:
-            df[self.filename_name] = df[self.filename_name].map(
-                lambda filename: self._normalize_filename(str(filename), self.ggdir)
-            )
+        self.flush()
+        df = pd.read_csv(self.abs_path)
+        df[self.filename_name] = df[self.filename_name].apply(lambda x: self._normalize_filename(x, self.ggdir))
         return df
 
     def flush(self) -> None:
-        self.df.to_csv(self.abs_path, index=False)
+        self.handler.flush()
 
     def read_for_file(self, ref_file: GGFile) -> Optional[Dict[str, Any]]:
         if not ref_file.abs_path.is_relative_to(self.ggdir.abs_path):
             raise GGFileNotFoundError(f"File '{ref_file.rel_path}' is not in bulk branch '{self.ggdir.rel_path}'.")
 
         filename = self._store_filename(ref_file, self.ggdir)
-        row = self.df[self.df[self.filename_name] == filename]
-        if row.empty:
-            return None
+        with self.abs_path.open() as f:
+            header = f.readline().strip().split(",")
+            if header[0] != self.filename_name:
+                raise ValueError(
+                    f"CSV file '{self.abs_path}' does not have '{self.filename_name}' as the first column, cannot use lookup."
+                )
 
-        data = row.iloc[0].to_dict()
-        data[self.filename_name] = self._normalize_filename(str(data[self.filename_name]), self.ggdir)
-        return data  # type: ignore
+            for line in f:
+                row = line.strip().split(",")
+                if row[0] == filename:
+                    r = {}
+                    for col, value in zip(header[1:], row[1:]):
+                        if col in self.cols:
+                            r[col] = value
+                    return r
+        return None
 
 
 class GGBulkJsonBase(GGBulkBase, ABC):

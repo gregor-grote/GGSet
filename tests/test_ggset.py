@@ -197,11 +197,10 @@ class TestGGDir(unittest.TestCase):
         _write(small_ggset_root / "test" / "data" / "file2.txt", "4")
 
         ggset = GGSet(small_ggset_root, type_sep_level=2)
-        bulk_writer = ggset.crate_bulk_csv_writer("bulk_data", layer=2, cols=["col1", "col2"])
-        for file in ggset.iterate("data"):
-            value = int(file.read_text())
-            bulk_writer.write_dict_row(file, {"col1": value, "col2": value * 10})
-        bulk_writer.flush()
+        with ggset.crate_bulk_csv_writer("bulk_data", layer=2, cols=["col1", "col2"]) as bulk_writer:
+            for file in ggset.iterate("data"):
+                value = int(file.read_text())
+                bulk_writer.write_dict_row(file, {"col1": value, "col2": value * 10})
         # Check that the CSV files were created and contain the correct data
         for sub_dir in ["train", "test"]:
             csv_file = ggset.get_sub_dir(sub_dir).get_file("bulk_data.csv")
@@ -215,10 +214,11 @@ class TestGGDir(unittest.TestCase):
         t1_file = ggset.get_sub_dir("train").get_sub_dir("data").get_file("file1.txt")
         assert t1_file is not None
         self.assertEqual(t1_file.read_text(), "1")
-        row = bulk_writer.read_for_file(t1_file)
-        assert row is not None
-        self.assertEqual(row["col1"], 1)
-        self.assertEqual(row["col2"], 10)
+        with ggset.crate_bulk_csv_writer("bulk_data", layer=2, cols=["col1", "col2"]) as bulk_writer:
+            row = bulk_writer.read_for_file(t1_file)
+            assert row is not None
+            self.assertEqual(row["col1"], "1")
+            self.assertEqual(row["col2"], "10")
 
     def test_bulk_csv_on_flat_dataset(self):
         small_ggset_root = Path(self._tmpdir.name) / "small_GGDir"
@@ -283,10 +283,9 @@ class TestGGDir(unittest.TestCase):
         _write(small_ggset_root / "test" / "data" / "file1.txt", "2")
 
         ggset = GGSet(small_ggset_root, type_sep_level=2)
-        bulk_writer = ggset.crate_bulk_csv_writer("bulk_data", layer=2, cols=["col1"], save_rel_paths=True)
-        for file in ggset.iterate("data"):
-            bulk_writer.write_dict_row(file, {"col1": int(file.read_text())})
-        bulk_writer.flush()
+        with ggset.crate_bulk_csv_writer("bulk_data", layer=2, cols=["col1"], save_rel_paths=True) as bulk_writer:
+            for file in ggset.iterate("data"):
+                bulk_writer.write_dict_row(file, {"col1": int(file.read_text())})
 
         train_csv = ggset.get_sub_dir("train").get_file("bulk_data.csv")
         assert train_csv is not None
