@@ -18,6 +18,7 @@ import json
 import yaml
 import pandas as pd
 from abc import ABC, abstractmethod
+import numpy as np
 
 __all__ = [
     "GGDir",
@@ -447,20 +448,6 @@ class GGDir:
         else:
             return self.parent.ancestor_at_level(target_level)
 
-    def write_text_file(self, content: str, name: str | None = None, extension: str = ".txt") -> GGFile:
-        """Write text content to a new file with a unique name in this directory."""
-        filename = name or self.get_unique_sub_file_name(extension)
-        file_path = self.abs_path / filename
-        file_path.write_text(content)
-        return GGFile(self, filename)
-
-    def write_image_file(self, image: Any, name: str | None = None, extension: str = ".png") -> GGFile:
-        """Write an image to a new file with a unique name in this directory."""
-        filename = name or self.get_unique_sub_file_name(extension)
-        file_path = self.abs_path / filename
-        cv2.imwrite(str(file_path), image)
-        return GGFile(self, filename)
-
     def print_tree(self, indent: str = "", indent_steps: int = 2, filtered_out: bool = False) -> None:
         """Print the GGDir tree structure starting from this node."""
         ending_counts = {}
@@ -656,6 +643,10 @@ class GGFile:
         """Read the file as a CSV into a pandas DataFrame."""
         return pd.read_csv(self.abs_path)
 
+    def read_np_array(self) -> Any:
+        """Read the file as a NumPy array using np.load."""
+        return np.load(self.abs_path)
+
     def write_text(self, content: str) -> None:
         """Write text content to the file."""
         self.abs_path.write_text(content)
@@ -663,6 +654,22 @@ class GGFile:
     def write_image(self, image: Any) -> None:
         """Write an image to the file using OpenCV."""
         cv2.imwrite(str(self.abs_path), image)
+
+    def write_json(self, data: Dict[str, Any]) -> None:
+        """Write a dictionary to the file as JSON."""
+        self.write_text(json.dumps(data, indent=4))
+
+    def write_yaml(self, data: Dict[str, Any]) -> None:
+        """Write a dictionary to the file as YAML."""
+        self.write_text(yaml.dump(data))
+
+    def write_dataframe(self, df: pd.DataFrame) -> None:
+        """Write a pandas DataFrame to the file as CSV."""
+        df.to_csv(self.abs_path, index=False)
+
+    def write_np_array(self, array: Any) -> None:
+        """Write a NumPy array to the file using np.save."""
+        np.save(self.abs_path, array)
 
     def __str__(self) -> str:
         return f"GGFile at '{self.rel_path}'"
@@ -995,7 +1002,10 @@ class GGBulkJsonSingleFile(GGFile, GGBulkJsonBase):
         if not isinstance(data, dict):
             raise TypeError("JSON bulk writers expect dictionary row data. Use write_dict_row for schema-shaped input.")
         filename = self._store_filename(ref_file, self.ggdir)
-        self.rows[filename] = data
+        if filename in self.rows:
+            self.rows[filename].update(data)
+        else:
+            self.rows[filename] = data
 
     def read_dataframe(self) -> pd.DataFrame:
         return pd.DataFrame(

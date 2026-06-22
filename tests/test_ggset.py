@@ -178,7 +178,8 @@ class TestGGDir(unittest.TestCase):
         self.assertEqual(str(cor_dir.rel_path), "labels/file1")
         target_file = cor_dir.get_file("0.txt", force_create=True)
         self.assertEqual(str(target_file.rel_path), "labels/file1/0.txt")
-        target_file_2 = cor_dir.write_text_file("eyo")
+        target_file_2 = cor_dir.get_new_sub_file(".txt")
+        target_file_2.write_text("eyo")
         self.assertEqual(str(target_file_2.rel_path), "labels/file1/1.txt")
         self.assertEqual(target_file_2.read_text(), "eyo")
 
@@ -352,7 +353,8 @@ class TestGGDir(unittest.TestCase):
         ggset = GGSet(small_ggset_root, type_sep_level=1)
         data_dir = ggset.get_sub_dir("data")
         assert data_dir is not None
-        new_file = data_dir.write_text_file("new content", name="new_file.txt")
+        new_file = data_dir.get_file("new_file.txt", force_create=True)
+        new_file.write_text("new content")
         self.assertEqual(new_file.read_text(), "new content")
         self.assertEqual(new_file.rel_path.name, "new_file.txt")
         self.assertEqual(new_file.rel_path.parent.name, "data")
@@ -370,7 +372,8 @@ class TestGGDir(unittest.TestCase):
         image[0:5, 0:5] = [255, 0, 0]  # Red square in top-left
         image[5:10, 5:10] = [0, 255, 0]  # Green square in bottom-right
 
-        new_file = data_dir.write_image_file(image, name="test_image.png")
+        new_file = data_dir.get_file("test_image.png", force_create=True)
+        new_file.write_image(image)
         self.assertEqual(new_file.rel_path.name, "test_image.png")
         self.assertEqual(new_file.rel_path.parent.name, "data")
 
@@ -414,6 +417,39 @@ class TestGGDir(unittest.TestCase):
         self.assertEqual(file.rel_path, Path("data/db1/file1.txt"))
         nen_existing_file = ggset.get_file("data/db1/non_existing.txt")
         self.assertIsNone(nen_existing_file)
+
+    def test_add_data_in_json(self):
+        small_ggset_root = Path(self._tmpdir.name) / "small_GGDir_add_data_json"
+        _write(small_ggset_root / "train" / "data" / "file1.txt", "1")
+        ggset = GGSet(small_ggset_root, type_sep_level=1)
+        bulk_writer = ggset.crate_bulk_json_writer("bulk_data", layer=1)
+        file = ggset.get_file("train/data/file1.txt")
+        assert file is not None
+        bulk_writer.write_dict_row(file, {"a": 1})
+        bulk_writer.flush()
+        json_file = ggset.get_file("bulk_data.json")
+        self.assertIsNotNone(json_file)
+        assert json_file is not None
+        payload = json.loads(json_file.read_text())
+        self.assertIsInstance(payload, dict)
+        self.assertIn("train/data/file1.txt", payload)
+        self.assertEqual(payload["train/data/file1.txt"]["a"], 1)
+
+        bulk_writer.write_dict_row(file, {"b": 2})
+        bulk_writer.flush()
+        payload_updated = json.loads(json_file.read_text())
+        self.assertIsInstance(payload_updated, dict)
+        self.assertIn("train/data/file1.txt", payload_updated)
+        self.assertEqual(payload_updated["train/data/file1.txt"]["a"], 1)
+        self.assertEqual(payload_updated["train/data/file1.txt"]["b"], 2)
+
+        bulk_writer.write_dict_row(file, {"a": 10})
+        bulk_writer.flush()
+        payload_overwrite = json.loads(json_file.read_text())
+        self.assertIsInstance(payload_overwrite, dict)
+        self.assertIn("train/data/file1.txt", payload_overwrite)
+        self.assertEqual(payload_overwrite["train/data/file1.txt"]["a"], 10)
+        self.assertEqual(payload_overwrite["train/data/file1.txt"]["b"], 2)
 
 
 if __name__ == "__main__":
