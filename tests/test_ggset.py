@@ -471,6 +471,19 @@ class TestGGDir(unittest.TestCase):
         self.assertEqual(ggset.file_count(filter_endings=(".csv",)), 1)
         self.assertEqual(ggset.file_count(filter_endings=(".json",)), 0)
 
+    def test_Get_existing_files_in_csv_writer(self):
+        small_ggset_root = Path(self._tmpdir.name) / "small_GGDir_existing_files_csv"
+        _write(small_ggset_root / "data" / "file1.txt", "1")
+        _write(small_ggset_root / "data" / "file2.txt", "2")
+        ggset = GGSet(small_ggset_root, type_sep_level=1)
+        with ggset.crate_bulk_csv_writer("bulk_data", layer=1, cols=["col1"], save_rel_paths=True) as bulk_writer:
+            for file in ggset.iterate("data"):
+                bulk_writer.write_dict_row(file, {"col1": int(file.read_text())})
+
+            existing_files = bulk_writer.get_existing_files_set()
+            print(existing_files)
+            self.assertEqual(set(existing_files), {"data/file1.txt", "data/file2.txt"})
+
 
 if __name__ == "__main__":
     unittest.main()

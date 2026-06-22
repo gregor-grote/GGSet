@@ -718,6 +718,10 @@ class GGBulkBase(ABC):
     def read_for_file(self, ref_file: GGFile) -> Optional[Dict[str, Any]]:
         pass
 
+    @abstractmethod
+    def get_existing_files_set(self) -> set[str]:
+        pass
+
     def _store_filename(self, ref_file: GGFile, bulk_dir: GGDir) -> str:
         if self.save_rel_paths:
             return str(ref_file.abs_path.relative_to(bulk_dir.abs_path))
@@ -826,6 +830,22 @@ class GGBulkCsvFileCollection(GGBulkCsvBase):
             self.files[cache_key] = bulk_file
         return bulk_file.read_for_file(ref_file)
 
+    def get_existing_files_set(self) -> set[str]:
+        existing_files = set()
+        self.flush()
+        for cur_dir in self.ggset.iterate_layer(self.layer - 1):
+            df_file = cur_dir.get_file(f"{self.name}.csv")
+            if df_file is not None:
+                bulk_file = GGBulkCsvSingleFile(
+                    cur_dir,
+                    f"{self.name}.csv",
+                    self.cols,
+                    save_rel_paths=self.save_rel_paths,
+                    filename_name=self.filename_name,
+                )
+                existing_files.update(bulk_file.get_existing_files_set())
+        return existing_files
+
     def __enter__(self) -> "GGBulkCsvFileCollection":
         return self
 
@@ -890,7 +910,7 @@ class GGBulkCsvSingleFile(GGFile, GGBulkCsvBase):
     def read_for_file(self, ref_file: GGFile) -> Optional[Dict[str, Any]]:
         if not ref_file.abs_path.is_relative_to(self.ggdir.abs_path):
             raise GGFileNotFoundError(f"File '{ref_file.rel_path}' is not in bulk branch '{self.ggdir.rel_path}'.")
-
+        self.flush()
         filename = self._store_filename(ref_file, self.ggdir)
         with self.abs_path.open() as f:
             header = f.readline().strip().split(",")
@@ -908,6 +928,20 @@ class GGBulkCsvSingleFile(GGFile, GGBulkCsvBase):
                             r[col] = value
                     return r
         return None
+
+    def get_existing_files_set(self) -> set[str]:
+        existing_files = set()
+        self.flush()
+        with self.abs_path.open() as f:
+            header = f.readline().strip().split(",")
+            if header[0] != self.filename_name:
+                raise ValueError(
+                    f"CSV file '{self.abs_path}' does not have '{self.filename_name}' as the first column, cannot determine existing files set."
+                )
+            for line in f:
+                row = line.strip().split(",")
+                existing_files.add(self._normalize_filename(row[0], self.ggdir))
+        return existing_files
 
 
 class GGBulkJsonBase(GGBulkBase, ABC):
@@ -933,6 +967,9 @@ class GGBulkJsonBase(GGBulkBase, ABC):
 
     def read_row_for_file(self, ref_file: GGFile) -> Optional[Dict[str, Any]]:
         return self.read_for_file(ref_file)
+
+    def get_existing_files_set(self) -> set[str]:
+        return set(self.read_dict().keys())
 
 
 class GGBulkJsonFileCollection(GGBulkJsonBase):
@@ -967,6 +1004,17 @@ class GGBulkJsonFileCollection(GGBulkJsonBase):
         if dfs:
             return pd.concat(dfs, ignore_index=True)
         return pd.DataFrame(columns=["Filename"])
+
+    def read_dict(self) -> Dict[str, Dict[str, Any]]:
+        r = {}
+        self.flush()
+        for cur_dir in self.ggset.iterate_layer(self.layer - 1):
+            df_file = cur_dir.get_file(f"{self.name}.json")
+            if df_file is not None:
+                r.update(
+                    GGBulkJsonSingleFile(cur_dir, f"{self.name}.json", save_rel_paths=self.save_rel_paths).read_dict()
+                )
+        return r
 
     def flush(self) -> None:
         for file in self.files.values():
@@ -1022,6 +1070,9 @@ class GGBulkJsonSingleFile(GGFile, GGBulkJsonBase):
         return pd.DataFrame(
             [{"Filename": self._normalize_filename(filename, self.ggdir), **row} for filename, row in self.rows.items()]
         )
+
+    def read_dict(self) -> Dict[str, Dict[str, Any]]:
+        return {self._normalize_filename(filename, self.ggdir): row for filename, row in self.rows.items()}
 
     def flush(self) -> None:
         self.abs_path.write_text(json.dumps(self.rows, indent=2, sort_keys=True))
