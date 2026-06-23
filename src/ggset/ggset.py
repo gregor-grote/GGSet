@@ -722,6 +722,13 @@ class GGBulkBase(ABC):
     def get_existing_files_set(self) -> set[str]:
         pass
 
+    def __enter__(self) -> "GGBulkBase":
+        return self
+
+    @abstractmethod
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        pass
+
     def _store_filename(self, ref_file: GGFile, bulk_dir: GGDir) -> str:
         if self.save_rel_paths:
             return str(ref_file.abs_path.relative_to(bulk_dir.abs_path))
@@ -852,7 +859,7 @@ class GGBulkCsvFileCollection(GGBulkCsvBase):
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
         self.flush()
         for file in self.files.values():
-            file.handler.close()
+            file.__exit__(exc_type, exc_val, exc_tb)
         self.files.clear()
 
 
@@ -887,7 +894,7 @@ class GGBulkCsvSingleFile(GGFile, GGBulkCsvBase):
         else:
             raise ValueError(f"Expected '{self.abs_path}' to be a file, but it is a directory.")
 
-        self.handler = self.abs_path.open("a")
+        self.handler = None  # self.abs_path.open("a")
 
     def write(self, ref_file: GGFile, data: Any) -> None:
         if not isinstance(data, list):
@@ -896,6 +903,8 @@ class GGBulkCsvSingleFile(GGFile, GGBulkCsvBase):
             raise ValueError(f"Data length {len(data)} does not match expected number of columns {len(self.cols) - 1}.")
         filename = self._store_filename(ref_file, self.ggdir)
         row = [filename] + [str(d) for d in data]
+        if self.handler is None:
+            self.handler = self.abs_path.open("a")
         self.handler.write(",".join(row) + "\n")
 
     def read_dataframe(self) -> pd.DataFrame:
@@ -905,7 +914,8 @@ class GGBulkCsvSingleFile(GGFile, GGBulkCsvBase):
         return df
 
     def flush(self) -> None:
-        self.handler.flush()
+        if self.handler is not None:
+            self.handler.flush()
 
     def read_for_file(self, ref_file: GGFile) -> Optional[Dict[str, Any]]:
         if not ref_file.abs_path.is_relative_to(self.ggdir.abs_path):
@@ -942,6 +952,15 @@ class GGBulkCsvSingleFile(GGFile, GGBulkCsvBase):
                 row = line.strip().split(",")
                 existing_files.add(self._normalize_filename(row[0], self.ggdir))
         return existing_files
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if self.handler is not None:
+            self.handler.flush()
+            self.handler.close()
+            self.handler = None
 
 
 class GGBulkJsonBase(GGBulkBase, ABC):
@@ -1033,6 +1052,13 @@ class GGBulkJsonFileCollection(GGBulkJsonBase):
             self.files[cache_key] = bulk_file
         return bulk_file.read_for_file(ref_file)
 
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.flush()
+        self.files.clear()
+
 
 class GGBulkJsonSingleFile(GGFile, GGBulkJsonBase):
     def __init__(self, ggdir: GGDir, file_name: str, save_rel_paths: bool = False) -> None:
@@ -1086,3 +1112,9 @@ class GGBulkJsonSingleFile(GGFile, GGBulkJsonBase):
         if row is None:
             return None
         return {"Filename": self._normalize_filename(filename, self.ggdir), **row}
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.flush()

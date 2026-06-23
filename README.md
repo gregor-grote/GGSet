@@ -80,8 +80,9 @@ dataset/
 		labels/
 ```
 
-Here the branch names are `images` and `labels`, which are at depth `2` from the root,
-so `type_sep_level=2`.
+Here the branch names are `images` and `labels`, which are at depth `2` from the root, so `type_sep_level=2`.
+
+If you do not wish to use this feature, you can set `type_sep_level=-1` (this is also the default) and GGSet will treat the entire dataset as a single branch.
 
 ## Quick Start
 
@@ -91,7 +92,7 @@ from ggset import GGSet
 ggset = GGSet("dataset", type_sep_level=2)
 
 for image_file in ggset.iterate("images"):
-    label_file = image_file.get_corresponding_file("labels", ".txt")
+    label_file = image_file.get_corresponding_file("labels", ".txt") 
     print(image_file.rel_path)
     if label_file is not None:
         print(label_file.read_text())
@@ -123,7 +124,7 @@ for file in ggset.iterate():
 image_file = ggset.get_file("train/images/sample1.png")
 assert image_file is not None
 
-label_file = image_file.get_corresponding_file("labels", ".txt")
+label_file = image_file.get_corresponding_file("labels", ".txt") # "train/labels/sample1.txt"
 if label_file is not None:
     print(label_file.read_text())
 ```
@@ -131,23 +132,34 @@ if label_file is not None:
 ### Create missing corresponding files
 
 ```python
-image_file = ggset.get_file("data/sample1.png")
+image_file = ggset.get_file("train/images/sample1.png")
 assert image_file is not None
 
-label_file = image_file.get_corresponding_file("labels", ".txt", force_create=True)
+label_file = image_file.get_corresponding_file("labels", ".txt", force_create=True) # "train/labels/sample1.txt"
 label_file.write_text("annotation")
 ```
 
 ### Create nested output directories
 
 ```python
-source_file = ggset.get_file("data/sample1.txt")
+source_file = ggset.get_file("train/images/sample1.txt")
 assert source_file is not None
 
-annotation_dir = source_file.get_corresponding_dir("labels", force_create=True)
-new_file = annotation_dir.get_file("0.txt", force_create=True)
+annotation_dir = source_file.get_corresponding_dir("labels", force_create=True) # "train/labels/sample1/"
+new_file = annotation_dir.get_file("0.txt", force_create=True) # "train/labels/sample1/0.txt"
 new_file.write_text("note")
 ```
+
+### Get corresponding file in the same directory
+
+```python
+image_file = ggset.get_file("train/images/sample1.png")
+assert image_file is not None
+label_file = image_file.get_corresponding_file_in_same_dir(".txt", force_create=True) # "train/images/sample1.txt"
+label_file.write_text("this is an annotation") 
+```
+
+
 
 ## Bulk Metadata Writers
 
@@ -164,13 +176,11 @@ These writers shard output by directory layer.
 from ggset import GGSet
 
 ggset = GGSet("dataset", type_sep_level=2)
-writer = ggset.crate_bulk_csv_writer("metrics", layer=2, cols=["score", "flag"])
+with ggset.crate_bulk_csv_writer("metrics", layer=2, cols=["score", "flag"]) as writer:
 
-for file in ggset.iterate("data"):
-    value = int(file.read_text())
-    writer.write_dict_row(file, {"score": value, "flag": value > 5})
-
-writer.flush()
+    for file in ggset.iterate("data"):
+        value = int(file.read_text())
+        writer.write_dict_row(file, {"score": value, "flag": value > 5})
 
 row = writer.read_for_file(file)
 print(row)
@@ -184,12 +194,11 @@ CSV files include a `Filename` column plus the columns you specify.
 from ggset import GGSet
 
 ggset = GGSet("dataset", type_sep_level=2)
-writer = ggset.crate_bulk_json_writer("metadata", layer=2)
+with ggset.crate_bulk_json_writer("metadata", layer=2) as writer:
 
-for file in ggset.iterate("data"):
-    writer.write_dict_row(file, {"split": "train", "quality": "ok"})
+    for file in ggset.iterate("data"):
+        writer.write_dict_row(file, {"split": "train", "quality": "ok"})
 
-writer.flush()
 
 row = writer.read_for_file(file)
 print(row)
