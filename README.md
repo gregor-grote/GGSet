@@ -186,7 +186,7 @@ row = writer.read_for_file(file)
 print(row)
 ```
 
-CSV files include a `Filename` column plus the columns you specify.
+CSV files include a `filename` column plus the columns you specify.
 
 ### JSON Bulk Writer
 

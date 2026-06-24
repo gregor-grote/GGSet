@@ -266,7 +266,7 @@ class TestGGDir(unittest.TestCase):
 
             df = bulk_writer.read_dataframe()
             expected_values = {"train": {1, 2}, "test": {3, 4}}[sub_dir]
-            df_sub_dir = df[df["Filename"].str.startswith(f"{sub_dir}/")]
+            df_sub_dir = df[df["filename"].str.startswith(f"{sub_dir}/")]
             self.assertEqual(set(df_sub_dir["col1"].tolist()), expected_values)
             self.assertEqual(set(df_sub_dir["col2"].tolist()), {v * 10 for v in expected_values})
 
@@ -290,10 +290,10 @@ class TestGGDir(unittest.TestCase):
         train_csv = ggset.get_sub_dir("train").get_file("bulk_data.csv")
         assert train_csv is not None
         stored_df = train_csv.read_dataframe()
-        self.assertEqual(stored_df["Filename"].tolist(), ["data/file1.txt"])
+        self.assertEqual(stored_df["filename"].tolist(), ["data/file1.txt"])
 
-        read_df = bulk_writer.read_dataframe().sort_values("Filename").reset_index(drop=True)
-        self.assertEqual(read_df["Filename"].tolist(), ["test/data/file1.txt", "train/data/file1.txt"])
+        read_df = bulk_writer.read_dataframe().sort_values("filename").reset_index(drop=True)
+        self.assertEqual(read_df["filename"].tolist(), ["test/data/file1.txt", "train/data/file1.txt"])
 
     def test_bulk_json_save_rel_paths(self):
         small_ggset_root = Path(self._tmpdir.name) / "small_GGDir_rel_json"
@@ -311,8 +311,8 @@ class TestGGDir(unittest.TestCase):
         payload = json.loads(train_json.read_text())
         self.assertEqual(list(payload.keys()), ["data/file1.txt"])
 
-        read_df = bulk_writer.read_dataframe().sort_values("Filename").reset_index(drop=True)
-        self.assertEqual(read_df["Filename"].tolist(), ["test/data/file1.txt", "train/data/file1.txt"])
+        read_df = bulk_writer.read_dataframe().sort_values("filename").reset_index(drop=True)
+        self.assertEqual(read_df["filename"].tolist(), ["test/data/file1.txt", "train/data/file1.txt"])
 
     def test_bulk_single_file_read_for_file_branch_mismatch_raises(self):
         small_ggset_root = Path(self._tmpdir.name) / "small_GGDir_branch_guard"
