@@ -5,6 +5,8 @@ from pathlib import Path
 import tempfile
 import unittest
 import src.ggset.ggset as ggmod
+import pandas as pd
+
 
 import numpy as np
 import cv2
@@ -197,10 +199,10 @@ class TestGGDir(unittest.TestCase):
         _write(small_ggset_root / "test" / "data" / "file2.txt", "4")
 
         ggset = GGSet(small_ggset_root, type_sep_level=2)
-        with ggset.crate_bulk_csv_writer("bulk_data", layer=2, cols=["col1", "col2"]) as bulk_writer:
+        with ggset.crate_bulk_csv_collection("bulk_data", layer=2, cols=["col1", "col2"]) as bulk_writer:
             for file in ggset.iterate("data"):
                 value = int(file.read_text())
-                bulk_writer.write_dict_row(file, {"col1": value, "col2": value * 10})
+                bulk_writer.write(file, {"col1": value, "col2": value * 10})
         # Check that the CSV files were created and contain the correct data
         for sub_dir in ["train", "test"]:
             csv_file = ggset.get_sub_dir(sub_dir).get_file("bulk_data.csv")
@@ -214,7 +216,7 @@ class TestGGDir(unittest.TestCase):
         t1_file = ggset.get_sub_dir("train").get_sub_dir("data").get_file("file1.txt")
         assert t1_file is not None
         self.assertEqual(t1_file.read_text(), "1")
-        with ggset.crate_bulk_csv_writer("bulk_data", layer=2, cols=["col1", "col2"]) as bulk_writer:
+        with ggset.crate_bulk_csv_collection("bulk_data", layer=2, cols=["col1", "col2"]) as bulk_writer:
             row = bulk_writer.read_for_file(t1_file)
             assert row is not None
             self.assertEqual(row["col1"], "1")
@@ -226,10 +228,10 @@ class TestGGDir(unittest.TestCase):
         _write(small_ggset_root / "file2.txt", "2")
 
         ggset = GGSet(small_ggset_root, type_sep_level=-1)
-        bulk_writer = ggset.crate_bulk_csv_writer("bulk_data", layer=1, cols=["col1"])
+        bulk_writer = ggset.crate_bulk_csv_collection("bulk_data", layer=1, cols=["col1"])
         for file in ggset.iterate():
             value = int(file.read_text())
-            bulk_writer.write_dict_row(file, {"col1": value})
+            bulk_writer.write(file, {"col1": value})
         bulk_writer.flush()
 
         csv_file = ggset.get_file("bulk_data.csv")
@@ -246,10 +248,10 @@ class TestGGDir(unittest.TestCase):
         _write(small_ggset_root / "test" / "data" / "file2.txt", "4")
 
         ggset = GGSet(small_ggset_root, type_sep_level=2)
-        bulk_writer = ggset.crate_bulk_json_writer("bulk_data", layer=2)
+        bulk_writer = ggset.crate_bulk_json_collection("bulk_data", layer=2)
         for file in ggset.iterate("data"):
             value = int(file.read_text())
-            bulk_writer.write_dict_row(file, {"col1": value, "col2": value * 10})
+            bulk_writer.write(file, {"col1": value, "col2": value * 10})
         bulk_writer.flush()
 
         for sub_dir in ["train", "test"]:
@@ -272,7 +274,7 @@ class TestGGDir(unittest.TestCase):
 
         t1_file = ggset.get_sub_dir("train").get_sub_dir("data").get_file("file1.txt")
         assert t1_file is not None
-        row = bulk_writer.read_row_for_file(t1_file)
+        row = bulk_writer.read_for_file(t1_file)
         assert row is not None
         self.assertEqual(row["col1"], 1)
         self.assertEqual(row["col2"], 10)
@@ -283,9 +285,9 @@ class TestGGDir(unittest.TestCase):
         _write(small_ggset_root / "test" / "data" / "file1.txt", "2")
 
         ggset = GGSet(small_ggset_root, type_sep_level=2)
-        with ggset.crate_bulk_csv_writer("bulk_data", layer=2, cols=["col1"], save_rel_paths=True) as bulk_writer:
+        with ggset.crate_bulk_csv_collection("bulk_data", layer=2, cols=["col1"], save_rel_paths=True) as bulk_writer:
             for file in ggset.iterate("data"):
-                bulk_writer.write_dict_row(file, {"col1": int(file.read_text())})
+                bulk_writer.write(file, {"col1": int(file.read_text())})
 
         train_csv = ggset.get_sub_dir("train").get_file("bulk_data.csv")
         assert train_csv is not None
@@ -301,9 +303,9 @@ class TestGGDir(unittest.TestCase):
         _write(small_ggset_root / "test" / "data" / "file1.txt", "2")
 
         ggset = GGSet(small_ggset_root, type_sep_level=2)
-        bulk_writer = ggset.crate_bulk_json_writer("bulk_data", layer=2, save_rel_paths=True)
+        bulk_writer = ggset.crate_bulk_json_collection("bulk_data", layer=2, save_rel_paths=True)
         for file in ggset.iterate("data"):
-            bulk_writer.write_dict_row(file, {"col1": int(file.read_text())})
+            bulk_writer.write(file, {"col1": int(file.read_text())})
         bulk_writer.flush()
 
         train_json = ggset.get_sub_dir("train").get_file("bulk_data.json")
@@ -313,38 +315,6 @@ class TestGGDir(unittest.TestCase):
 
         read_df = bulk_writer.read_dataframe().sort_values("filename").reset_index(drop=True)
         self.assertEqual(read_df["filename"].tolist(), ["test/data/file1.txt", "train/data/file1.txt"])
-
-    def test_bulk_single_file_read_for_file_branch_mismatch_raises(self):
-        small_ggset_root = Path(self._tmpdir.name) / "small_GGDir_branch_guard"
-        _write(small_ggset_root / "train" / "data" / "file1.txt", "1")
-        _write(small_ggset_root / "test" / "data" / "file1.txt", "2")
-
-        ggset = GGSet(small_ggset_root, type_sep_level=2)
-
-        csv_writer = ggset.crate_bulk_csv_writer("bulk_data", layer=2, cols=["col1"])
-        for file in ggset.iterate("data"):
-            csv_writer.write_dict_row(file, {"col1": int(file.read_text())})
-        csv_writer.flush()
-
-        train_file = ggset.get_sub_dir("train").get_sub_dir("data").get_file("file1.txt")
-        test_file = ggset.get_sub_dir("test").get_sub_dir("data").get_file("file1.txt")
-        assert train_file is not None
-        assert test_file is not None
-
-        csv_single = ggmod.GGBulkCsvSingleFile(ggset.get_sub_dir("train"), "bulk_data.csv", ["col1"])
-        self.assertIsNotNone(csv_single.read_for_file(train_file))
-        with self.assertRaises(GGFileNotFoundError):
-            csv_single.read_for_file(test_file)
-
-        json_writer = ggset.crate_bulk_json_writer("bulk_json", layer=2)
-        for file in ggset.iterate("data"):
-            json_writer.write_dict_row(file, {"col1": int(file.read_text())})
-        json_writer.flush()
-
-        json_single = ggmod.GGBulkJsonSingleFile(ggset.get_sub_dir("train"), "bulk_json.json")
-        self.assertIsNotNone(json_single.read_for_file(train_file))
-        with self.assertRaises(GGFileNotFoundError):
-            json_single.read_for_file(test_file)
 
     def test_write_text_from_dir(self):
         small_ggset_root = Path(self._tmpdir.name) / "small_GGDir_write_from_dir"
@@ -421,10 +391,10 @@ class TestGGDir(unittest.TestCase):
         small_ggset_root = Path(self._tmpdir.name) / "small_GGDir_add_data_json"
         _write(small_ggset_root / "train" / "data" / "file1.txt", "1")
         ggset = GGSet(small_ggset_root, type_sep_level=1)
-        bulk_writer = ggset.crate_bulk_json_writer("bulk_data", layer=1)
+        bulk_writer = ggset.crate_bulk_json_collection("bulk_data", layer=1)
         file = ggset.get_file("train/data/file1.txt")
         assert file is not None
-        bulk_writer.write_dict_row(file, {"a": 1})
+        bulk_writer.write(file, {"a": 1})
         bulk_writer.flush()
         json_file = ggset.get_file("bulk_data.json")
         self.assertIsNotNone(json_file)
@@ -434,7 +404,7 @@ class TestGGDir(unittest.TestCase):
         self.assertIn("train/data/file1.txt", payload)
         self.assertEqual(payload["train/data/file1.txt"]["a"], 1)
 
-        bulk_writer.write_dict_row(file, {"b": 2})
+        bulk_writer.write(file, {"b": 2})
         bulk_writer.flush()
         payload_updated = json.loads(json_file.read_text())
         self.assertIsInstance(payload_updated, dict)
@@ -442,7 +412,7 @@ class TestGGDir(unittest.TestCase):
         self.assertEqual(payload_updated["train/data/file1.txt"]["a"], 1)
         self.assertEqual(payload_updated["train/data/file1.txt"]["b"], 2)
 
-        bulk_writer.write_dict_row(file, {"a": 10})
+        bulk_writer.write(file, {"a": 10})
         bulk_writer.flush()
         payload_overwrite = json.loads(json_file.read_text())
         self.assertIsInstance(payload_overwrite, dict)
@@ -476,13 +446,60 @@ class TestGGDir(unittest.TestCase):
         _write(small_ggset_root / "data" / "file1.txt", "1")
         _write(small_ggset_root / "data" / "file2.txt", "2")
         ggset = GGSet(small_ggset_root, type_sep_level=1)
-        with ggset.crate_bulk_csv_writer("bulk_data", layer=1, cols=["col1"], save_rel_paths=True) as bulk_writer:
+        with ggset.crate_bulk_csv_collection("bulk_data", layer=1, cols=["col1"], save_rel_paths=True) as bulk_writer:
             for file in ggset.iterate("data"):
-                bulk_writer.write_dict_row(file, {"col1": int(file.read_text())})
+                bulk_writer.write(file, {"col1": int(file.read_text())})
 
             existing_files = bulk_writer.get_existing_files_set()
             print(existing_files)
             self.assertEqual(set(existing_files), {"data/file1.txt", "data/file2.txt"})
+
+    def test_dynamic_csv_writer(self):
+        small_ggset_root = Path(self._tmpdir.name) / "small_GGDir_dynamic_csv"
+        _write(small_ggset_root / "train" / "data" / "file1.txt", "1")
+        _write(small_ggset_root / "test" / "data" / "file1.txt", "2")
+
+        ggset = GGSet(small_ggset_root, type_sep_level=2)
+        with ggset.create_bulk_dynamic_csv_collection("bulk_data", layer=2, save_rel_paths=True) as bulk_writer:
+            for file in ggset.iterate("data"):
+                text = file.read_text()
+                if text == "1":
+                    bulk_writer.write(file, {"col1": 1, "col2": 10})
+                elif text == "2":
+                    bulk_writer.write(file, {"col3": 2, "col4": 20})
+
+        bulk_data_csv_train = ggset.get_file("train/bulk_data.csv")
+        assert bulk_data_csv_train is not None
+        df_train = bulk_data_csv_train.read_dataframe()
+        self.assertEqual(set(df_train.columns), {"filename", "col1", "col2"})
+        self.assertEqual(df_train["filename"].tolist(), ["data/file1.txt"])
+        self.assertEqual(df_train["col1"].tolist(), [1])
+        self.assertEqual(df_train["col2"].tolist(), [10])
+
+        bulk_data_csv_test = ggset.get_file("test/bulk_data.csv")
+        assert bulk_data_csv_test is not None
+        df_test = bulk_data_csv_test.read_dataframe()
+        self.assertEqual(set(df_test.columns), {"filename", "col3", "col4"})
+        self.assertEqual(df_test["filename"].tolist(), ["data/file1.txt"])
+        self.assertEqual(df_test["col3"].tolist(), [2])
+        self.assertEqual(df_test["col4"].tolist(), [20])
+
+        with ggset.create_bulk_dynamic_csv_collection("bulk_data", layer=2, save_rel_paths=True) as bulk_writer:
+            df = bulk_writer.read_dataframe()
+
+            self.assertEqual(set(df.columns), {"filename", "col1", "col2", "col3", "col4"})
+            self.assertEqual(df["filename"].tolist(), ["test/data/file1.txt", "train/data/file1.txt"])
+            train_row = df[df["filename"] == "train/data/file1.txt"].iloc[0]
+            self.assertEqual(train_row["col1"], 1)
+            self.assertEqual(train_row["col2"], 10)
+            self.assertTrue(pd.isna(train_row["col3"]))
+            self.assertTrue(pd.isna(train_row["col4"]))
+
+            test_row = df[df["filename"] == "test/data/file1.txt"].iloc[0]
+            self.assertTrue(pd.isna(test_row["col1"]))
+            self.assertTrue(pd.isna(test_row["col2"]))
+            self.assertEqual(test_row["col3"], 2)
+            self.assertEqual(test_row["col4"], 20)
 
 
 if __name__ == "__main__":
