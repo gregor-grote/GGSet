@@ -497,6 +497,17 @@ class GGDir:
             not_filtered = child.name in [c.name for c in self.filtered_sub_dirs]
             child.print_tree(indent + " " * indent_steps, indent_steps, filtered_out=not not_filtered)
 
+    def print_counts(
+        self, level: int, filter_endings: tuple[str, ...] | None = None, indent: str = "", indent_steps: int = 2
+    ) -> None:
+        """Print the file counts below this node at a specific layer, optionally filtered by file endings."""
+        if self.level == level:
+            count = self.file_count(rec=True, filter_endings=filter_endings)
+            print(f"{indent}{self.name}/: {count} files")
+        else:
+            for child in self.filtered_sub_dirs:
+                child.print_counts(level, filter_endings, indent + " " * indent_steps, indent_steps)
+
     def __str__(self) -> str:
         return f"GGDir at '{self.abs_path}'"
 
