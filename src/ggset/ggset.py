@@ -501,10 +501,13 @@ class GGDir:
         self, level: int, filter_endings: tuple[str, ...] | None = None, indent: str = "", indent_steps: int = 2
     ) -> None:
         """Print the file counts below this node at a specific layer, optionally filtered by file endings."""
+        if level < self.level:
+            raise ValueError(f"Target level {level} is above current node level {self.level}.")
         if self.level == level:
             count = self.file_count(rec=True, filter_endings=filter_endings)
             print(f"{indent}{self.name}/: {count} files")
         else:
+            print(f"{indent}{self.name}/")
             for child in self.filtered_sub_dirs:
                 child.print_counts(level, filter_endings, indent + " " * indent_steps, indent_steps)
 
