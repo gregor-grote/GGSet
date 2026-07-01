@@ -1,286 +1,163 @@
 # GGSet
 
-GGSet is a small utility library for working with hierarchical dataset folders.
-It builds a directory tree, lets you iterate files by logical data branch, resolves
-corresponding files across branches, and provides bulk CSV/JSON sidecar writers for
-dataset metadata.
+A lightweight library for working with structured datasets where data and labels are stored across flexible directory layouts.
 
-## What It Solves
+## Core Idea
 
-Many datasets are organized as parallel folder trees such as:
+`GGSet` provides a unified interface to iterate over files and access corresponding metadata (labels) — regardless of how the dataset is organized on disk.
 
-```text
-dataset/
-	train/
-		images/
-			sample1.png
-		labels/
-			sample1.txt
-	test/
-		images/
-			sample2.png
-		labels/
-			sample2.txt
-```
+It is especially useful for:
 
-GGSet helps you:
-
-- traverse one branch such as `images`
-- find the matching file in another branch such as `labels`
-- create missing corresponding files or directories
-- read typed file content through a lightweight `GGFile` wrapper
-- store metadata per directory layer in CSV or JSON files
+* Image datasets with separate or distributed annotations
+* Machine learning pipelines with custom folder structures
+* Datasets with CSV or JSON metadata files
 
 ## Installation
 
 ```bash
-pip install https://github.com/gregor-grote/GGSet
-```
-
-or 
-```bash
 pip install git+https://github.com/gregor-grote/GGSet.git
 ```
 
+---
 
-## Core Concepts
+## Main Features
 
-### `GGSet`
+### 1. Branched Dataset Support (Core Feature)
 
-`GGSet` is the root object. It stores the absolute dataset root path and builds a tree
-of `GGDir` nodes below it.
+Work with datasets where data and labels live in different directory branches.
 
-### `GGDir`
+* Configure via `data_type_level`
+* Access corresponding files across branches
 
-`GGDir` represents a directory in the dataset tree.
+```python
+ggset = GGSet(path, data_type_level=2)
 
-- `rel_path` is the path from the dataset root
-- `abs_path` is computed from `GGSet.root_path / rel_path`
-- `name` is derived from the path rather than stored separately
-
-### `GGFile`
-
-`GGFile` wraps a concrete file and provides:
-
-- `abs_path` and `rel_path`
-- typed readers such as `read_text`, `read_json`, `read_yaml`, `read_dataframe`
-- simple scalar helpers such as `read_single_int`, `read_single_float`, `read_bool_list`
-- corresponding-file resolution across dataset branches
-
-### `type_sep_level`
-
-`type_sep_level` tells GGSet where the parallel data branches live.
-
-Example:
-
-```text
-dataset/
-	train/
-		images/
-		labels/
+for file in ggset.iterate(data_type="images"):
+    label_file = file.get_corresponding_file(data_type="labels", extension=".json")
 ```
 
-Here the branch names are `images` and `labels`, which are at depth `2` from the root, so `type_sep_level=2`.
+Supports:
 
-If you do not wish to use this feature, you can set `type_sep_level=-1` (this is also the default) and GGSet will treat the entire dataset as a single branch.
+* Reading corresponding label files
+* Writing new labels into parallel branches
+* Automatic path resolution between branches
 
-## Quick Start
+---
+
+### 2. CSV Metadata Collections
+
+Read and write labels stored in CSV files across the dataset.
+
+```python
+with ggset.create_bulk_csv_collection("labels.csv", layer=2, rel_paths=True) as labels:
+    for file, label in labels:
+        ...
+```
+
+Features:
+
+* Iterate `(file, label)` pairs
+* Load full dataset as a pandas DataFrame
+* Write new metadata entries
+* Optional caching for performance vs. memory trade-off
+
+---
+
+### 3. JSON Metadata Collections
+
+Same concept as CSV, but for JSON-based metadata.
+
+```python
+with ggset.create_bulk_json_collection("labels.json", layer=2, rel_paths=True) as labels:
+    for file, label in labels:
+        ...
+```
+
+Features:
+
+* Read full metadata as dictionary
+* Seamless integration with dataset iteration
+* Flexible schema handling
+
+---
+
+### 4. Corresponding File Handling
+
+Easily resolve related files based on dataset structure:
+
+* Across branches:
+
+```python
+file.get_corresponding_file(data_type="labels", extension=".json")
+```
+
+* In the same directory:
+
+```python
+file.get_corresponding_file_in_same_dir(".json")
+```
+
+Supports:
+
+* Reading / writing labels
+* Automatic creation of missing files (`force_create=True`)
+
+---
+
+### 5. Corresponding Directory Handling
+
+Work with label directories instead of single files.
+
+* Same directory:
+
+```python
+file.get_corresponding_dir_in_same_dir()
+```
+
+* Different branch:
+
+```python
+file.get_corresponding_dir("labels")
+```
+
+Features:
+
+* Iterate over label files per sample
+* Create new label directories dynamically
+* Auto-generate files inside label folders
+
+---
+
+## Supported Dataset Layouts
+
+GGSet works with multiple dataset structures:
+
+* **Branched datasets** (data and labels separated)
+* **Flat datasets with CSV/JSON metadata**
+* **Same-directory labels** (image + annotation file)
+* **Per-sample label directories**
+* **Label directories in separate branches**
+
+---
+
+## Minimal Example
 
 ```python
 from ggset import GGSet
 
-ggset = GGSet("dataset", type_sep_level=2)
+ggset = GGSet("dataset_path")
 
-for image_file in ggset.iterate("images"):
-    label_file = image_file.get_corresponding_file("labels", ".txt") 
-    print(image_file.rel_path)
-    if label_file is not None:
-        print(label_file.read_text())
+for file in ggset.iterate(filter_endings=(".png",)):
+    img = file.read_image()
 ```
 
-## Common Usage
+---
 
-### Iterate one branch
+## Summary
 
-```python
-from ggset import GGSet
+GGSet abstracts away dataset structure complexity and provides:
 
-ggset = GGSet("dataset", type_sep_level=1)
-
-for data_file in ggset.iterate("data"):
-    print(data_file.rel_path, data_file.read_text())
-```
-
-### Iterate all files
-
-```python
-for file in ggset.iterate():
-    print(file.rel_path)
-```
-
-### Resolve corresponding files
-
-```python
-image_file = ggset.get_file("train/images/sample1.png")
-assert image_file is not None
-
-label_file = image_file.get_corresponding_file("labels", ".txt") # "train/labels/sample1.txt"
-if label_file is not None:
-    print(label_file.read_text())
-```
-
-### Create missing corresponding files
-
-```python
-image_file = ggset.get_file("train/images/sample1.png")
-assert image_file is not None
-
-label_file = image_file.get_corresponding_file("labels", ".txt", force_create=True) # "train/labels/sample1.txt"
-label_file.write_text("annotation")
-```
-
-### Create nested output directories
-
-```python
-source_file = ggset.get_file("train/images/sample1.txt")
-assert source_file is not None
-
-annotation_dir = source_file.get_corresponding_dir("labels", force_create=True) # "train/labels/sample1/"
-new_file = annotation_dir.get_file("a.txt", force_create=True) # "train/labels/sample1/a.txt" 
-new_file.write_text("note")
-new_file_auto_name = annotation_dir.get_new_sub_file(".txt", force_create=True) # "train/labels/sample1/<auto-generated_unique-name>.txt"
-new_file_auto_name.write_text("note in auto-named file")
-```
-
-### Get corresponding file in the same directory
-
-```python
-image_file = ggset.get_file("train/images/sample1.png")
-assert image_file is not None
-label_file = image_file.get_corresponding_file_in_same_dir(".txt", force_create=True) # "train/images/sample1.txt"
-label_file.write_text("this is an annotation") 
-```
-
-
-
-## Bulk Metadata Readerd/Writers
-
-GGSet includes three bulk reader/writer:
-
-- CSV Reader/writers for tabular metadata with fixed columns
-- CSV Reader/writers for tabular metadata with dynamic columns
-- JSON Reader/writers for dictionary-shaped metadata
-
-These reader/writers shard output by directory layer.
-
-### CSV Bulk reder/writer
-
-```python
-from ggset import GGSet
-
-ggset = GGSet("dataset", type_sep_level=2)
-with ggset.crate_bulk_csv_collection("metrics.csv", layer=2, cols=["score", "flag"]) as writer:
-
-    for file in ggset.iterate("data"):
-        value = int(file.read_text())
-        writer.write(file, {"score": value, "flag": value > 5})
-
-with ggset.crate_bulk_csv_collection("metrics.csv", layer=2, cols=["score", "flag"]) as csv_reader:
-    df = csv_reader.read_dataframe()
-    print(df)
-```
-
-CSV files include a `filename` column plus the columns you specify.
-
-### Dynamic CSV Bulk Writer
-
-```python
-from ggset import GGSet
-
-ggset = GGSet("dataset", type_sep_level=2)
-with ggset.create_bulk_dynamic_csv_collection("metrics.csv", layer=2) as writer:
-    for file in ggset.iterate("data"):
-        value = file.read_single_int()
-        writer.write(file, {"score": value, "flag": value > 5})
-
-with ggset.create_bulk_dynamic_csv_collection("metrics.csv", layer=2) as csv_reader:
-    df = csv_reader.read_dataframe()
-    print(df)
-```
-
-Note that the writing process is the same as for the fixed-column CSV writer, but the reading process is different.
-When the different csv files have different columns, the dynamic reader will merge them into a single dataframe with all columns and fill missing values with NaN.
-Furthermore, the first time `write` is called on a file, the columns are automatically detected and set for that file. This allows you to write different columns for different files.
-
-
-### JSON Bulk Reader/Writer
-
-```python
-from ggset import GGSet
-
-ggset = GGSet("dataset", type_sep_level=2)
-with ggset.crate_bulk_json_collection("metadata.json", layer=2) as writer:
-
-    for file in ggset.iterate("data"):
-        writer.write(file, {"split": "train", "quality": "ok"})
-
-with ggset.crate_bulk_json_collection("metadata.json", layer=2) as json_reader:
-    data = json_reader.read_dict()
-    print(data)
-
-```
-
-JSON bulk files store filename keys mapped to row dictionaries.
-
-### `save_rel_paths`
-
-If `save_rel_paths=True`, bulk files store paths relative to the bulk file location.
-When reading back combined data, GGSet normalizes those paths back to root-relative
-paths.
-
-```python
-writer = ggset.crate_bulk_csv_collection(
-    "metrics.csv",
-    layer=2,
-    cols=["score"],
-    save_rel_paths=True,
-)
-```
-
-## File Helpers
-
-`GGFile` supports these common readers:
-
-- `read_text()`
-- `read_image()`
-- `read_json()`
-- `read_yaml()`
-- `read_dataframe()`
-- `read_single_bool()`
-- `read_single_int()`
-- `read_single_float()`
-- `read_int_list()`
-- `read_float_list()`
-- `read_bool_list()`
-
-It also supports direct writing for text and images:
-
-- `write_text(content)`
-- `write_image(image)`
-
-## Filters
-
-You can restrict traversal at a specific level.
-
-```python
-ggset.add_filter_allow_only(2, "db1")
-
-for file in ggset.iterate("data"):
-    print(file.rel_path)
-```
-
-Or exclude directories:
-
-```python
-ggset.add_filter_exclude(2, "db2")
-```
+* Unified iteration over files
+* Flexible metadata handling (CSV / JSON)
+* Robust mapping between data and labels
+* Support for complex real-world dataset layouts

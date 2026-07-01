@@ -14,9 +14,11 @@ from typing import (
     Any,
     Dict,
     Iterable,
+    Iterator,
     List,
     Optional,
     Generator,
+    Self,
     Set,
     Tuple,
     Union,
@@ -42,8 +44,8 @@ __all__ = [
     "GGDirNotFoundError",
     "GGFileNotFoundError",
     "GGBulkBase",
-    "GGBulkCsvFileCollection",
     "GGBulkJsonFileCollection",
+    "GGBulkCsvFileCollection",
 ]
 
 
@@ -65,7 +67,7 @@ class GGDir:
         self,
         path: str | Path,
         parent: GGDir | None = None,
-        type_sep_level: int = -1,
+        data_type_level: int = -1,
         level: int = 0,
     ) -> None:
         """Initialize a GGDir node and eagerly build its children.
@@ -73,7 +75,7 @@ class GGDir:
         Args:
             path: Directory represented by this node.
             parent: Parent node, or ``None`` for the root node.
-            type_sep_level: Remaining depth until type-separation nodes are
+            data_type_level: Remaining depth until type-separation nodes are
                 reached (``0`` means this node is type-separation level, ``-1`` means no type-separation).
             level: Depth from the root node.
         """
@@ -83,7 +85,7 @@ class GGDir:
         input_path = Path(path)
         self.parent = parent
         self.sub_dirs: List[GGDir] = []
-        self.type_sep_level = type_sep_level
+        self.data_type_level = data_type_level
         self.level = level
         if self.parent is None:
             self.rel_path = Path()
@@ -110,7 +112,7 @@ class GGDir:
                 child = GGDir(
                     self.rel_path / item.name,
                     parent=self,
-                    type_sep_level=self.type_sep_level,
+                    data_type_level=self.data_type_level,
                     level=self.level + 1,
                 )
                 self.sub_dirs.append(child)
@@ -141,7 +143,7 @@ class GGDir:
             new_child = GGDir(
                 self.rel_path / name,
                 parent=self,
-                type_sep_level=self.type_sep_level,
+                data_type_level=self.data_type_level,
                 level=self.level + 1,
             )
             self.sub_dirs.append(new_child)
@@ -183,27 +185,27 @@ class GGDir:
         return allowed
 
     @property
-    def type_sep_level_parent(self) -> GGDir:
+    def data_type_level_parent(self) -> GGDir:
         """Return the nearest ancestor (or self) marked as type separation level.
 
         Raises:
             GGDirNotFoundError: If no type separation level node can be found up to the root.
         """
-        if self.is_type_sep_level_parent:
+        if self.is_data_type_level_parent:
             return self
         if self.parent is None:
             raise GGDirNotFoundError(f"No type separation level found in '{self.name}' and no parent to check.")
-        return self.parent.type_sep_level_parent
+        return self.parent.data_type_level_parent
 
     @property
-    def is_type_sep_level_parent(self) -> bool:
+    def is_data_type_level_parent(self) -> bool:
         """Return ``True`` if this node's children are type branches (for example, ``images`` and ``labels``)."""
-        return self.level == self.type_sep_level - 1
+        return self.level == self.data_type_level - 1
 
     @property
     def data_type(self) -> Optional[GGDir]:
         """Return the data type of this node"""
-        if self.level == self.type_sep_level:
+        if self.level == self.data_type_level:
             return self
         elif self.parent is not None:
             return self.parent.data_type
@@ -248,36 +250,36 @@ class GGDir:
 
     @overload
     def get_corresponding_file(
-        self, cur_file: Path, target_type: str, target_extension: str, force_create: Literal[True]
+        self, cur_file: Path, data_type: str, extension: str, force_create: Literal[True]
     ) -> GGFile: ...
 
     @overload
     def get_corresponding_file(
-        self, cur_file: Path, target_type: str, target_extension: str, force_create: Literal[False] = False
+        self, cur_file: Path, data_type: str, extension: str, force_create: Literal[False] = False
     ) -> GGFile | None: ...
 
     def get_corresponding_file(
-        self, cur_file: Path, target_type: str, target_extension: str, force_create: bool = False
+        self, cur_file: Path, data_type: str, extension: str, force_create: bool = False
     ) -> GGFile | None:
         """Map a file to its counterpart in another type separation branch.
 
         The relative path below the current type separation-level node is preserved while
-        switching the first branch to ``target_type`` and replacing the file
-        extension with ``target_extension``.
+        switching the first branch to ``data_type`` and replacing the file
+        extension with ``extension``.
 
         Args:
             cur_file: Source file path.
-            target_type: Target top-level type branch name.
-            target_extension: New suffix, including leading dot.
+            data_type: Target top-level type branch name.
+            extension: New suffix, including leading dot.
             force_create: If ``True``, create an empty file at the target path if it does not exist.
         Returns:
             Matching ``GGFile`` in the target branch if available.
             If ``force_create`` is ``True``, a ``GGFile`` is always returned.
         """
-        data_level = self.type_sep_level_parent
+        data_level = self.data_type_level_parent
         rel_path = cur_file.relative_to(data_level.abs_path)
         try:
-            final_GGDir = data_level.get_sub_dir(target_type, force_create=force_create)
+            final_GGDir = data_level.get_sub_dir(data_type, force_create=force_create)
         except GGDirNotFoundError:
             return None
 
@@ -288,36 +290,36 @@ class GGDir:
                 return None
 
         try:
-            return final_GGDir.get_file(cur_file.with_suffix(target_extension).name, force_create=force_create)
+            return final_GGDir.get_file(cur_file.with_suffix(extension).name, force_create=force_create)
         except GGFileNotFoundError:
             return None
 
     @overload
-    def get_corresponding_dir(self, cur_file: Path, target_type: str, force_create: Literal[True]) -> GGDir: ...
+    def get_corresponding_dir(self, cur_file: Path, data_type: str, force_create: Literal[True]) -> GGDir: ...
 
     @overload
     def get_corresponding_dir(
-        self, cur_file: Path, target_type: str, force_create: Literal[False] = False
+        self, cur_file: Path, data_type: str, force_create: Literal[False] = False
     ) -> GGDir | None: ...
 
-    def get_corresponding_dir(self, cur_file: Path, target_type: str, force_create: bool = False) -> GGDir | None:
+    def get_corresponding_dir(self, cur_file: Path, data_type: str, force_create: bool = False) -> GGDir | None:
         """Map a file to its counterpart type branch.
 
-        The relative path below the current type-level node is preserved while switching the first branch to ``target_type``.
+        The relative path below the current type-level node is preserved while switching the first branch to ``data_type``.
 
         Args:
             cur_file: Source file path.
-            target_type: Target top-level type branch name.
+            data_type: Target top-level type branch name.
             force_create: If ``True``, create missing directories along the target path.
         Returns:
             Matching ``GGDir`` type branch if available.
             If ``force_create`` is ``True``, a ``GGDir`` is always returned.
         """
 
-        data_level = self.type_sep_level_parent
+        data_level = self.data_type_level_parent
         rel_path = cur_file.relative_to(data_level.abs_path)
         try:
-            final_GGDir = data_level.get_sub_dir(target_type, force_create=force_create)
+            final_GGDir = data_level.get_sub_dir(data_type, force_create=force_create)
         except GGDirNotFoundError:
             return None
 
@@ -335,35 +337,35 @@ class GGDir:
 
     @overload
     def get_corresponding_file_for_this_dir(
-        self, target_type: str, extension: str, force_create: Literal[True]
+        self, data_type: str, extension: str, force_create: Literal[True]
     ) -> GGFile: ...
 
     @overload
     def get_corresponding_file_for_this_dir(
-        self, target_type: str, extension: str, force_create: Literal[False]
+        self, data_type: str, extension: str, force_create: Literal[False]
     ) -> GGFile | None: ...
 
     def get_corresponding_file_for_this_dir(
-        self, target_type: str, extension: str, force_create: bool = False
+        self, data_type: str, extension: str, force_create: bool = False
     ) -> GGFile | None:
         """Map this directory to a file in another type branch with the same relative path.
 
         The relative path below the current type separation-level node is preserved while
-        switching the first branch to ``target_type`` and replacing the directory name
+        switching the first branch to ``data_type`` and replacing the directory name
         with a file of the same name and the specified extension.
 
         Args:
-            target_type: Target top-level type branch name.
+            data_type: Target top-level type branch name.
             extension: New suffix, including leading dot.
             force_create: If ``True``, create an empty file at the target path if it does not exist.
         Returns:
             Matching ``GGFile`` in the target branch if available.
             If ``force_create`` is ``True``, a ``GGFile`` is always returned.
         """
-        data_level = self.type_sep_level_parent
+        data_level = self.data_type_level_parent
         rel_path = self.abs_path.relative_to(data_level.abs_path)
         try:
-            final_GGDir = data_level.get_sub_dir(target_type, force_create=force_create)
+            final_GGDir = data_level.get_sub_dir(data_type, force_create=force_create)
         except GGDirNotFoundError:
             return None
 
@@ -426,10 +428,10 @@ class GGDir:
         Yields:
             ``GGFile`` objects matching traversal and filtering criteria.
         """
-        if self.type_sep_level > 0 and data_type is None and self.level > self.type_sep_level + 1:
+        if self.data_type_level > 0 and data_type is None and self.level > self.data_type_level + 1:
             for child in self.filtered_sub_dirs:
                 yield from child.iterate(data_type, filter_endings, min_layer)
-        elif self.type_sep_level > 0 and data_type is not None and self.is_type_sep_level_parent:
+        elif self.data_type_level > 0 and data_type is not None and self.is_data_type_level_parent:
             if data_type is None:
                 raise ValueError(f"Data branch name must be provided when iterating over data level '{self.name}'.")
             child = self.get_sub_dir(data_type)
@@ -527,15 +529,41 @@ class GGDir:
     def __repr__(self) -> str:
         return str(self.rel_path)
 
+    def create_bulk_json_collection(self, name: str, layer: int, rel_paths: bool = False) -> GGBulkJsonFileCollection:
+        """Create a GGBulkJsonFileCollection for writing or reading rows to JSON files across a layer.
+
+        Args:
+            name: Name of the bulk collection file (e.g., "bulk_data.json").
+            layer: Layer at which to create the bulk collection.
+            rel_paths: If True, store relative paths in the bulk collection; otherwise, store absolute paths.
+        """
+        return GGBulkJsonFileCollection(self, name, layer, rel_paths=rel_paths)
+
+    def create_bulk_csv_collection(
+        self, name: str, layer: int, rel_paths: bool = False, filename_col_name: str = "filename", caching: bool = False
+    ) -> GGBulkCsvFileCollection:
+        """Create a GGBulkCsvFileCollection for writing or reading rows to CSV files across a layer.
+
+        Args:
+            name: Name of the bulk collection file (e.g., "bulk_data.csv").
+            layer: Layer at which to create the bulk collection.
+            rel_paths: If True, store relative paths in the bulk collection; otherwise, store absolute paths.
+            filename_col_name: Name of the column that stores file names in the CSV.
+            caching: If True, enable caching for the bulk collection. Warning: when caching=True, and you call write with an file that already exists in the bulk collection, the new data will overwrite the old data. When caching=False, the new data will be appended to the bulk collection, and you will have to handle duplicates yourself.
+        """
+        return GGBulkCsvFileCollection(
+            self, name, layer, rel_paths=rel_paths, filename_col_name=filename_col_name, caching=caching
+        )
+
 
 class GGSet(GGDir):
     """Root GGDir specialization used as the main user entry point."""
 
     filters: Dict[int, Tuple[str, ...]] = {}
 
-    def __init__(self, path: str | Path, type_sep_level: int = -1) -> None:
+    def __init__(self, path: str | Path, data_type_level: int = -1) -> None:
         self.root_path = Path(path).resolve()
-        super().__init__(Path(), parent=None, type_sep_level=type_sep_level, level=0)
+        super().__init__(Path(), parent=None, data_type_level=data_type_level, level=0)
 
     def add_filter_allow_only(self, level: int, *allowed_dirs) -> None:
         """Add a filter to only allow certain subdirectories at a given level.
@@ -554,26 +582,6 @@ class GGSet(GGDir):
             excluded_dirs: Iterable of directory names to exclude at the specified level.
         """
         self.filters[level] = tuple([f"!{dir_name}" for dir_name in excluded_dirs])
-
-    def crate_bulk_csv_collection(
-        self, name: str, layer: int, cols: List[str], save_rel_paths: bool = False, filename_col_name: str = "filename"
-    ) -> GGBulkCsvFileCollection:
-        """Create a GGBulkCsvFileCollection for writing or reading rows to CSV files across a layer."""
-        return GGBulkCsvFileCollection(
-            self, name, layer, cols, save_rel_paths=save_rel_paths, filename_col_name=filename_col_name
-        )
-
-    def crate_bulk_json_collection(
-        self, name: str, layer: int, save_rel_paths: bool = False
-    ) -> GGBulkJsonFileCollection:
-        """Create a GGBulkJsonFileCollection for writing or reading rows to JSON files across a layer."""
-        return GGBulkJsonFileCollection(self, name, layer, save_rel_paths=save_rel_paths)
-
-    def create_bulk_dynamic_csv_collection(
-        self, name: str, layer: int, save_rel_paths: bool = False
-    ) -> GGBulkDynamicCsvFileCollection:
-        """Create a GGBulkDynamicCsvFileCollection for writing or reading rows to dynamic CSV files across a layer."""
-        return GGBulkDynamicCsvFileCollection(self, name, layer, save_rel_paths=save_rel_paths)
 
 
 TRUEISH_VALUES = {"true", "1", "yes", "y"}
@@ -603,32 +611,26 @@ class GGFile:
         return self.ggdir.rel_path / self.file_name
 
     @overload
-    def get_corresponding_file(
-        self, target_type: str, target_extension: str, force_create: Literal[True]
-    ) -> GGFile: ...
+    def get_corresponding_file(self, data_type: str, extension: str, force_create: Literal[True]) -> GGFile: ...
 
     @overload
     def get_corresponding_file(
-        self, target_type: str, target_extension: str, force_create: Literal[False] = False
+        self, data_type: str, extension: str, force_create: Literal[False] = False
     ) -> GGFile | None: ...
 
-    def get_corresponding_file(
-        self, target_type: str, target_extension: str, force_create: bool = False
-    ) -> GGFile | None:
+    def get_corresponding_file(self, data_type: str, extension: str, force_create: bool = False) -> GGFile | None:
         """Resolve this file's counterpart in another data branch."""
-        return self.ggdir.get_corresponding_file(
-            self.abs_path, target_type, target_extension, force_create=force_create
-        )
+        return self.ggdir.get_corresponding_file(self.abs_path, data_type, extension, force_create=force_create)
 
     @overload
-    def get_corresponding_dir(self, target_type: str, force_create: Literal[True]) -> GGDir: ...
+    def get_corresponding_dir(self, data_type: str, force_create: Literal[True]) -> GGDir: ...
 
     @overload
-    def get_corresponding_dir(self, target_type: str, force_create: Literal[False] = False) -> GGDir | None: ...
+    def get_corresponding_dir(self, data_type: str, force_create: Literal[False] = False) -> GGDir | None: ...
 
-    def get_corresponding_dir(self, target_type: str, force_create: bool = False) -> GGDir | None:
+    def get_corresponding_dir(self, data_type: str, force_create: bool = False) -> GGDir | None:
         """Resolve this file's dataset branch counterpart."""
-        return self.ggdir.get_corresponding_dir(self.abs_path, target_type, force_create=force_create)
+        return self.ggdir.get_corresponding_dir(self.abs_path, data_type, force_create=force_create)
 
     @overload
     def get_corresponding_file_in_same_dir(self, extension: str, force_create: Literal[True]) -> GGFile: ...
@@ -641,6 +643,16 @@ class GGFile:
     def get_corresponding_file_in_same_dir(self, extension: str, force_create: bool = False) -> GGFile | None:
         """Resolve this file's counterpart in the same directory but with a different extension."""
         return self.ggdir.get_file(self.abs_path.with_suffix(extension).name, force_create=force_create)
+
+    @overload
+    def get_corresponding_dir_in_same_dir(self, force_create: Literal[True]) -> GGDir: ...
+
+    @overload
+    def get_corresponding_dir_in_same_dir(self, force_create: Literal[False] = False) -> GGDir | None: ...
+
+    def get_corresponding_dir_in_same_dir(self, force_create: bool = False) -> GGDir | None:
+        """Resolve this file's counterpart directory in the same directory with the same name as the file (without extension)."""
+        return self.ggdir.get_sub_dir(self.abs_path.with_suffix("").name, force_create=force_create)
 
     def read_image(self) -> Any:
         """Read an image file with OpenCV.
@@ -765,11 +777,18 @@ class GGBulkBase(ABC):
     def get_existing_files_set(self) -> set[str]:
         pass
 
-    def __enter__(self) -> "GGBulkBase":
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
         self.flush()
+
+    @abstractmethod
+    def iter(self) -> Iterator[Tuple[GGFile, Dict[str, Any]]]:
+        pass
+
+    def __iter__(self) -> Iterator[Tuple[GGFile, Dict[str, Any]]]:
+        return self.iter()
 
 
 T = TypeVar("T", bound="GGBulkSingleFileBase")
@@ -778,13 +797,13 @@ T = TypeVar("T", bound="GGBulkSingleFileBase")
 class GGBulkCollectionBase(GGBulkBase, ABC, Generic[T]):
     """Base class for bulk writers that manage multiple files across a GGSet."""
 
-    def __init__(self, file_name: str, layer: int, ggset: GGSet, save_rel_paths: bool = False) -> None:
+    def __init__(self, file_name: str, layer: int, root: GGDir, rel_paths: bool = False) -> None:
         if layer < 1:
             raise ValueError("Layer must be >= 1.")
         self.file_name = file_name
         self.layer = layer
-        self.ggset = ggset
-        self.save_rel_paths = save_rel_paths
+        self.root = root
+        self.rel_paths = rel_paths
         self.files: Dict[str, T] = {}
 
     @abstractmethod
@@ -793,19 +812,19 @@ class GGBulkCollectionBase(GGBulkBase, ABC, Generic[T]):
         pass
 
     @overload
-    def get_bulk_file_for_file(self, ref_file: GGFile, create: Literal[True]) -> T: ...
+    def get_bulk_file(self, ggdir: GGDir, create: Literal[True]) -> T: ...
 
     @overload
-    def get_bulk_file_for_file(self, ref_file: GGFile, create: Literal[False]) -> Optional[T]: ...
+    def get_bulk_file(self, ggdir: GGDir, create: Literal[False]) -> Optional[T]: ...
 
-    def get_bulk_file_for_file(self, ref_file: GGFile, create: bool = False) -> Optional[T]:
-        """Get or create the bulk file corresponding to the given reference file."""
-        target_dir = ref_file.ggdir.ancestor_at_level(self.layer - 1)
-        cache_key = str(target_dir.rel_path)
+    def get_bulk_file(self, ggdir: GGDir, create: bool = False) -> Optional[T]:
+        """Get or create the bulk file for a specific GGDir."""
+        bulk_dir = ggdir.ancestor_at_level(self.layer - 1)
+        cache_key = str(bulk_dir.rel_path)
         if cache_key not in self.files:
-            target_file = target_dir.abs_path / self.file_name
+            target_file = bulk_dir.abs_path / self.file_name
             if target_file.exists() or create:
-                self.files[cache_key] = self._create_bulk_file(target_dir)
+                self.files[cache_key] = self._create_bulk_file(bulk_dir)
             else:
                 return None
 
@@ -813,7 +832,7 @@ class GGBulkCollectionBase(GGBulkBase, ABC, Generic[T]):
 
     def read_for_file(self, ref_file: GGFile) -> Optional[Dict[str, Any]]:
         """Read data for a specific reference file from the corresponding bulk file."""
-        bulk_file = self.get_bulk_file_for_file(ref_file, create=False)
+        bulk_file = self.get_bulk_file(ref_file.ggdir, create=False)
         if bulk_file is None:
             return None
         return bulk_file.read_for_file(ref_file)
@@ -821,8 +840,8 @@ class GGBulkCollectionBase(GGBulkBase, ABC, Generic[T]):
     def read_dataframe(self) -> pd.DataFrame:
         """Read and concatenate data from all bulk files into a single DataFrame."""
         dfs = []
-        for dir in self.ggset.iterate_layer(self.layer - 1):
-            bulk_file = self.get_bulk_file_for_file(GGFile(dir, self.file_name), create=False)
+        for dir in self.root.iterate_layer(self.layer - 1):
+            bulk_file = self.get_bulk_file(dir, create=False)
             if bulk_file is not None:
                 dfs.append(bulk_file.read_dataframe())
         if dfs:
@@ -833,8 +852,8 @@ class GGBulkCollectionBase(GGBulkBase, ABC, Generic[T]):
     def read_dict(self) -> Dict[str, Any]:
         """Read and merge data from all bulk files into a single dictionary."""
         result = {}
-        for dir in self.ggset.iterate_layer(self.layer - 1):
-            bulk_file = self.get_bulk_file_for_file(GGFile(dir, self.file_name), create=False)
+        for dir in self.root.iterate_layer(self.layer - 1):
+            bulk_file = self.get_bulk_file(dir, create=False)
             if bulk_file is not None:
                 result.update(bulk_file.read_dict())
         return result
@@ -842,10 +861,19 @@ class GGBulkCollectionBase(GGBulkBase, ABC, Generic[T]):
     def get_existing_files_set(self) -> Set[str]:
         """Get a set of all existing reference file names across all bulk files."""
         existing_files = set()
-        for dir in self.ggset.iterate_layer(self.layer - 1):
-            bulk_file = self.get_bulk_file_for_file(GGFile(dir, self.file_name), create=False)
+        for dir in self.root.iterate_layer(self.layer - 1):
+            bulk_file = self.get_bulk_file(dir, create=False)
             if bulk_file is not None:
                 existing_files.update(bulk_file.get_existing_files_set())
+        return existing_files
+
+    def get_existing_annotation_files_set(self) -> Set[T]:
+        """Get a set of all existing annotation files across all bulk files."""
+        existing_files = set()
+        for dir in self.root.iterate_layer(self.layer - 1):
+            f = self.get_bulk_file(dir, create=False)
+            if f is not None:
+                existing_files.add(f)
         return existing_files
 
     def flush(self) -> None:
@@ -854,12 +882,27 @@ class GGBulkCollectionBase(GGBulkBase, ABC, Generic[T]):
 
     def write(self, ref_file: GGFile, data: Any) -> None:
         """Write data for a specific reference file to the corresponding bulk file."""
-        bulk_file = self.get_bulk_file_for_file(ref_file, create=True)
+        bulk_file = self.get_bulk_file(ref_file.ggdir, create=True)
         bulk_file.write(ref_file, data)
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
         for bulk_file in self.files.values():
             bulk_file.__exit__(exc_type, exc_val, exc_tb)
+        self.files.clear()
+
+    def iter(self) -> Iterator[Tuple[GGFile, Dict[str, Any]]]:
+        """Iterate over all bulk files managed by this collection."""
+        for dir in self.root.iterate_layer(self.layer - 1):
+            bulk_file = self.get_bulk_file(dir, create=False)
+            if bulk_file is not None:
+                data = bulk_file.read_dict()
+                for filename, row_data in data.items():
+                    file = self.root.root.get_file(filename)
+                    if file is not None:
+                        yield file, row_data
+                    else:
+                        raise GGFileNotFoundError(f"File '{filename}' not found in GGSet.")
+            self.__exit__(None, None, None)
 
 
 class GGBulkSingleFileBase(GGBulkBase, GGFile, ABC):
@@ -871,36 +914,47 @@ class GGBulkSingleFileBase(GGBulkBase, GGFile, ABC):
         GGFile.__init__(self, ggdir, parent.file_name)
 
     def _store_filename(self, ref_file: GGFile) -> str:
-        if self.parent.save_rel_paths:
+        if self.parent.rel_paths:
             return str(ref_file.abs_path.relative_to(self.ggdir.abs_path))
         return str(ref_file.rel_path)
 
     def _normalize_filename(self, filename: str) -> str:
-        if self.parent.save_rel_paths:
+        if self.parent.rel_paths:
             return str((self.ggdir.rel_path / Path(filename)).as_posix())
         return filename
+
+    def iter(self) -> Iterator[Tuple[GGFile, Dict[str, Any]]]:
+        """Iterate over all rows in the bulk file, yielding reference files and their associated data."""
+        data = self.read_dict()
+        for filename, row_data in data.items():
+            file = self.ggdir.root.get_file(filename)
+            if file is not None:
+                yield file, row_data
+            else:
+                raise GGFileNotFoundError(f"File '{filename}' not found in GGSet.")
 
 
 class GGBulkCsvFileCollection(GGBulkCollectionBase["GGBulkCsvSingleFile"]):
     def __init__(
         self,
-        ggset: GGSet,
+        root: GGDir,
         file_name: str,
         layer: int,
-        cols: List[str],
-        save_rel_paths: bool = False,
+        rel_paths: bool = False,
         filename_col_name: str = "filename",
+        caching: bool = False,
     ) -> None:
         if not file_name.endswith(".csv"):
             file_name += ".csv"
-        if cols[0] != filename_col_name:
-            cols = [filename_col_name] + cols
-        super().__init__(file_name=file_name, layer=layer, ggset=ggset, save_rel_paths=save_rel_paths)
-        self.cols = cols
+        super().__init__(file_name=file_name, layer=layer, root=root, rel_paths=rel_paths)
         self.filename_col_name = filename_col_name
+        self.caching = caching
 
-    def _create_bulk_file(self, ggdir: GGDir) -> "GGBulkCsvSingleFile":
-        return GGBulkCsvSingleFile(ggdir, self)
+    def _create_bulk_file(self, ggdir: GGDir) -> "GGBulkCsvSingleFile | GGBulkCachingCsvFileCollection":
+        if self.caching:
+            return GGBulkCachingCsvFileCollection(ggdir, self)
+        else:
+            return GGBulkCsvSingleFile(ggdir, self)
 
 
 class GGBulkCsvSingleFile(GGBulkSingleFileBase):
@@ -908,133 +962,6 @@ class GGBulkCsvSingleFile(GGBulkSingleFileBase):
         self,
         ggdir: GGDir,
         parent: GGBulkCsvFileCollection,
-    ) -> None:
-        super().__init__(ggdir, parent)
-        self.parent = parent
-
-        if not self.abs_path.exists() or self.abs_path.read_text().strip() == "":
-            with self.abs_path.open("w") as f:
-                f.write(",".join(self.parent.cols) + "\n")
-        elif self.abs_path.is_file():
-            with self.abs_path.open() as f:
-                header = f.readline().strip().split(",")
-                if header != self.parent.cols:
-                    raise ValueError(
-                        f"Existing CSV file '{self.abs_path}' has columns {header} which do not match expected columns {self.parent.cols}."
-                    )
-        else:
-            raise ValueError(f"Expected '{self.abs_path}' to be a file, but it is a directory.")
-
-        self.handler = None
-
-    def write(self, ref_file: GGFile, data: Any) -> None:
-        if isinstance(data, dict):
-            row = [str(data.get(col, "")) for col in self.parent.cols[1:]]
-        elif not isinstance(data, list):
-            raise TypeError("CSV bulk writers expect list-like or dictionary row data")
-        elif len(data) != len(self.parent.cols) - 1:
-            raise ValueError(
-                f"Data length {len(data)} does not match expected number of columns {len(self.parent.cols) - 1}."
-            )
-        else:
-            row = [str(d) for d in data]
-
-        filename = self._store_filename(ref_file)
-        row = [filename] + row
-
-        if self.handler is None:
-            self.handler = self.abs_path.open("a")
-        self.handler.write(",".join(row) + "\n")
-
-    def read_dataframe(self) -> pd.DataFrame:
-        self.flush()
-        df = pd.read_csv(self.abs_path)
-        df[self.parent.filename_col_name] = df[self.parent.filename_col_name].apply(
-            lambda x: self._normalize_filename(x)
-        )
-        return df
-
-    def read_dict(self) -> Dict[str, Any]:
-        df = self.read_dataframe()
-        result = {}
-        for _, row in df.iterrows():
-            filename = row[self.parent.filename_col_name]
-            result[filename] = row.drop(labels=[self.parent.filename_col_name]).to_dict()
-        return result
-
-    def flush(self) -> None:
-        if self.handler is not None:
-            self.handler.flush()
-
-    def read_for_file(self, ref_file: GGFile) -> Optional[Dict[str, Any]]:
-        if not ref_file.abs_path.is_relative_to(self.ggdir.abs_path):
-            raise GGFileNotFoundError(f"File '{ref_file.rel_path}' is not in bulk branch '{self.ggdir.rel_path}'.")
-        self.flush()
-        filename = self._store_filename(ref_file)
-        with self.abs_path.open() as f:
-            header = f.readline().strip().split(",")
-            if header[0] != self.parent.filename_col_name:
-                raise ValueError(
-                    f"CSV file '{self.abs_path}' does not have '{self.parent.filename_col_name}' as the first column, cannot use lookup."
-                )
-
-            for line in f:
-                row = line.strip().split(",")
-                if row[0] == filename:
-                    r = {}
-                    for col, value in zip(header[1:], row[1:]):
-                        if col in self.parent.cols:
-                            r[col] = value
-                    return r
-        return None
-
-    def get_existing_files_set(self) -> set[str]:
-        self.flush()
-        existing_files = set()
-        with self.abs_path.open() as f:
-            header = f.readline().strip().split(",")
-            if header[0] != self.parent.filename_col_name:
-                raise ValueError(
-                    f"CSV file '{self.abs_path}' does not have '{self.parent.filename_col_name}' as the first column, cannot determine existing files set."
-                )
-            for line in f:
-                row = line.strip().split(",")
-                existing_files.add(self._normalize_filename(row[0]))
-        return existing_files
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        if self.handler is not None:
-            self.handler.flush()
-            self.handler.close()
-            self.handler = None
-
-
-class GGBulkDynamicCsvFileCollection(GGBulkCollectionBase["GGBulkDynamicCsvSingleFile"]):
-    def __init__(
-        self,
-        ggset: GGSet,
-        file_name: str,
-        layer: int,
-        save_rel_paths: bool = False,
-        filename_col_name: str = "filename",
-    ) -> None:
-        if not file_name.endswith(".csv"):
-            file_name += ".csv"
-        super().__init__(file_name=file_name, layer=layer, ggset=ggset, save_rel_paths=save_rel_paths)
-        self.filename_col_name = filename_col_name
-
-    def _create_bulk_file(self, ggdir: GGDir) -> "GGBulkDynamicCsvSingleFile":
-        return GGBulkDynamicCsvSingleFile(ggdir, self)
-
-
-class GGBulkDynamicCsvSingleFile(GGBulkSingleFileBase):
-    def __init__(
-        self,
-        ggdir: GGDir,
-        parent: GGBulkDynamicCsvFileCollection,
     ) -> None:
         super().__init__(ggdir, parent)
         self.parent = parent
@@ -1138,11 +1065,90 @@ class GGBulkDynamicCsvSingleFile(GGBulkSingleFileBase):
             self.handler = None
 
 
+class GGBulkCachingCsvFileCollection(GGBulkSingleFileBase):
+    def __init__(
+        self,
+        ggdir: GGDir,
+        parent: GGBulkCsvFileCollection,
+    ) -> None:
+        super().__init__(ggdir, parent)
+        self.parent = parent
+        self.df = None
+
+    def _get_df(self) -> pd.DataFrame | None:
+        if self.df is None:
+            if self.abs_path.exists():
+                if not self.abs_path.is_file():
+                    raise ValueError(f"Expected a file at '{self.abs_path}', but found a directory.")
+                df = pd.read_csv(self.abs_path)
+                if not df.empty:
+                    self.df = df
+        return self.df
+
+    def write(self, ref_file: GGFile, data: Any) -> None:
+        if not isinstance(data, dict):
+            raise TypeError("Dynamic CSV bulk writers expect dictionary row data.")
+        filename = self._store_filename(ref_file)
+        df = self._get_df()
+        if df is None:
+            df = pd.DataFrame(columns=[self.parent.filename_col_name] + list(data.keys()))
+        if filename in df[self.parent.filename_col_name].values:
+            df.loc[df[self.parent.filename_col_name] == filename, list(data.keys())] = pd.Series(data)
+        else:
+            new_row = {self.parent.filename_col_name: filename}
+            new_row.update(data)
+            self.df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
+
+    def read_dataframe(self) -> pd.DataFrame:
+        df = self._get_df()
+        if df is None:
+            return pd.DataFrame(columns=[self.parent.filename_col_name])
+        df = df.copy()
+        df[self.parent.filename_col_name] = df[self.parent.filename_col_name].apply(
+            lambda x: self._normalize_filename(x)
+        )
+        return df
+
+    def read_dict(self) -> Dict[str, Any]:
+        df = self.read_dataframe()
+        result = {}
+        for _, row in df.iterrows():
+            filename = row[self.parent.filename_col_name]
+            result[filename] = row.drop(labels=[self.parent.filename_col_name]).to_dict()
+        return result
+
+    def flush(self) -> None:
+        if self.df is not None:
+            self.df.to_csv(self.abs_path, index=False)
+
+    def read_for_file(self, ref_file: GGFile) -> Optional[Dict[str, Any]]:
+        df = self._get_df()
+        if df is None:
+            return None
+        filename = self._store_filename(ref_file)
+        row = df[df[self.parent.filename_col_name] == filename]
+        if not row.empty:
+            return row.iloc[0].drop(labels=[self.parent.filename_col_name]).to_dict()  # type: ignore
+        return None
+
+    def get_existing_files_set(self) -> set[str]:
+        df = self._get_df()
+        if df is None:
+            return set()
+        return {self._normalize_filename(filename) for filename in df[self.parent.filename_col_name].tolist()}
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.flush()
+
+
 class GGBulkJsonFileCollection(GGBulkCollectionBase["GGBulkJsonSingleFile"]):
-    def __init__(self, ggset: GGSet, file_name: str, layer: int, save_rel_paths: bool = False) -> None:
+    def __init__(self, root: GGDir, file_name: str, layer: int, rel_paths: bool = False) -> None:
         if not file_name.endswith(".json"):
             file_name += ".json"
-        super().__init__(file_name=file_name, layer=layer, ggset=ggset, save_rel_paths=save_rel_paths)
+        super().__init__(file_name=file_name, layer=layer, root=root, rel_paths=rel_paths)
 
     def _create_bulk_file(self, ggdir: GGDir) -> "GGBulkJsonSingleFile":
         return GGBulkJsonSingleFile(ggdir, self)
