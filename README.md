@@ -26,6 +26,20 @@ pip install git+https://github.com/gregor-grote/GGSet.git
 
 Work with datasets where data and labels live in different directory branches.
 
+```text
+dataset/
+	train/
+		images/
+			sample1.png
+		labels/
+			sample1.json
+	test/
+		images/
+			sample2.png
+		labels/
+			sample2.json
+```
+
 * Configure via `data_type_level`
 * Access corresponding files across branches
 
@@ -34,6 +48,7 @@ ggset = GGSet(path, data_type_level=2)
 
 for file in ggset.iterate(data_type="images"):
     label_file = file.get_corresponding_file(data_type="labels", extension=".json")
+    label_data = label_file.read_json()
 ```
 
 Supports:
@@ -46,10 +61,23 @@ Supports:
 
 ### 2. CSV Metadata Collections
 
+```text
+dataset/
+	train/
+    annotations.csv
+		sample1.png
+		sample2.png
+	test/
+    annotations.csv
+		sample3.png
+    sample4.png
+		
+```
+
 Read and write labels stored in CSV files across the dataset.
 
 ```python
-with ggset.create_bulk_csv_collection("labels.csv", layer=2, rel_paths=True) as labels:
+with ggset.create_bulk_csv_collection("annotations.csv", layer=2, rel_paths=True, caching=True) as labels:
     for file, label in labels:
         ...
 ```
@@ -59,29 +87,13 @@ Features:
 * Iterate `(file, label)` pairs
 * Load full dataset as a pandas DataFrame
 * Write new metadata entries
-* Optional caching for performance vs. memory trade-off
+* Choose if relative paths (from the csv file) or absolute paths (from the dataset root) are written in the CSV file (When iterating, the paths are always resolved)
+* Choose if the CSV file is cached in memory for faster access, or not for lower memory usage (because it is just appended when writing new entries)
+* Use `.create_bulk_json_collection()` for JSON metadata files instead of CSV
 
 ---
 
-### 3. JSON Metadata Collections
-
-Same concept as CSV, but for JSON-based metadata.
-
-```python
-with ggset.create_bulk_json_collection("labels.json", layer=2, rel_paths=True) as labels:
-    for file, label in labels:
-        ...
-```
-
-Features:
-
-* Read full metadata as dictionary
-* Seamless integration with dataset iteration
-* Flexible schema handling
-
----
-
-### 4. Corresponding File Handling
+### 3. Corresponding File Handling
 
 Easily resolve related files based on dataset structure:
 
@@ -104,7 +116,7 @@ Supports:
 
 ---
 
-### 5. Corresponding Directory Handling
+### 4. Corresponding Directory Handling
 
 Work with label directories instead of single files.
 
