@@ -586,7 +586,19 @@ class GGFile:
 
     def exists(self) -> bool:
         """Return ``True`` when this file exists on disk."""
-        return self.abs_path.exists() and self.abs_path.is_file()
+        if self.abs_path.exists():
+            if not self.abs_path.is_file():
+                raise ValueError(f"Expected '{self.abs_path}' to be a file, but it is a directory.")
+            return True
+        return False
+
+    def touch(self) -> Self:
+        """Create the file on disk if it does not exist."""
+        self.abs_path.parent.mkdir(parents=True, exist_ok=True)
+        if self.abs_path.exists() and not self.abs_path.is_file():
+            raise ValueError(f"Expected '{self.abs_path}' to be a file, but it is a directory.")
+        self.abs_path.touch(exist_ok=True)
+        return self
 
     def get_corresponding_file(self, data_type: str, extension: str, target_set: GGSet | None = None) -> GGFile:
         """Resolve this file's counterpart in another data branch.
@@ -695,32 +707,32 @@ class GGFile:
 
     def write_text(self, content: str) -> None:
         """Write text content to the file."""
-        self.abs_path.parent.mkdir(parents=True, exist_ok=True)
+        self.touch()
         self.abs_path.write_text(content)
 
     def write_image(self, image: Any) -> None:
         """Write an image to the file using OpenCV."""
-        self.abs_path.parent.mkdir(parents=True, exist_ok=True)
+        self.touch()
         cv2.imwrite(str(self.abs_path), image)
 
     def write_json(self, data: Dict[str, Any]) -> None:
         """Write a dictionary to the file as JSON."""
-        self.abs_path.parent.mkdir(parents=True, exist_ok=True)
+        self.touch()
         self.write_text(json.dumps(data, indent=4))
 
     def write_yaml(self, data: Dict[str, Any]) -> None:
         """Write a dictionary to the file as YAML."""
-        self.abs_path.parent.mkdir(parents=True, exist_ok=True)
+        self.touch()
         self.write_text(yaml.dump(data))
 
     def write_dataframe(self, df: pd.DataFrame) -> None:
         """Write a pandas DataFrame to the file as CSV."""
-        self.abs_path.parent.mkdir(parents=True, exist_ok=True)
+        self.touch()
         df.to_csv(self.abs_path, index=False)
 
     def write_np_array(self, array: Any) -> None:
         """Write a NumPy array to the file using np.save."""
-        self.abs_path.parent.mkdir(parents=True, exist_ok=True)
+        self.touch()
         np.save(self.abs_path, array)
 
     def __str__(self) -> str:
