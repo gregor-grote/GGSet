@@ -1,11 +1,13 @@
 """Utilities for navigating hierarchical dataset folders.
 
-This module provides two classes:
+This module provides a suite of classes for structured dataset management:
 
-- ``GGDir`` to model a directory tree and iterate through files by logical
-    dataset categories.
+- ``GGSet`` / ``GGDir`` to model hierarchical directory trees, apply level-based
+    filtering, and cleanly iterate through files or map counterpart branches.
 - ``GGFile`` to represent a concrete file and offer typed convenience
-    readers (image, text, numbers, JSON, YAML, CSV).
+    readers/writers (images, dataframes, text, numbers, JSON, YAML, NumPy arrays).
+- Bulk Collection Classes (``GGBulkJsonFileCollection``, ``GGBulkCsvFileCollection``)
+    to efficiently manage aggregate metadata and annotations across dataset layers.
 """
 
 from __future__ import annotations
@@ -62,6 +64,7 @@ class GGFileNotFoundError(GGNotFoundError):
 
 
 class GGDir:
+    """Represents a directory node within a hierarchical dataset tree structure."""
 
     def __init__(
         self,
@@ -143,7 +146,7 @@ class GGDir:
         """Return a direct child node by name.
 
         Args:
-            name: Child directory name.
+            name: Child directory name. Supports forward-slash separated paths.
         """
         if "/" in name:
             name_parts = name.split("/")
@@ -237,7 +240,7 @@ class GGDir:
         """Return a file wrapper from this directory.
 
         Args:
-            filename: Basename of the target file.
+            filename: Basename of the target file. Supports forward-slash separated paths.
         """
         if "/" in filename:
             parts = filename.split("/")
@@ -359,12 +362,13 @@ class GGDir:
     def get_new_sub_file(self, extension: str) -> GGFile:
         """Create a new file with a unique name in this directory and return its GGFile."""
         filename = self.get_unique_sub_file_name(extension)
-        # file_path = self.abs_path / filename
-        # file_path.touch()
         return GGFile(self, filename)
 
     def iterate(
-        self, data_type: str | None = None, filter_endings: Iterable[str] = (), min_layer: int = 0
+        self,
+        data_type: str | List[str] | Tuple[str, ...] | None = None,
+        filter_endings: Iterable[str] = (),
+        min_layer: int = 0,
     ) -> Generator[GGFile, None, None]:
         """Yield files for one logical data branch.
 
@@ -375,7 +379,7 @@ class GGDir:
         - Within the selected branch: yield files and recurse into descendants.
 
         Args:
-            data_type: Optional: Data branch name to iterate (e.g. ``"images"``)
+            data_type: Optional: Data branch name(s) to iterate (e.g. ``"images"`` or ``["images", "labels"]``)
             filter_endings: Optional list of lowercase suffixes to include
                 (e.g. ``".jpg"``, ``".txt"``). If empty, all files are
                 yielded.
@@ -384,12 +388,17 @@ class GGDir:
         Yields:
             ``GGFile`` objects matching traversal and filtering criteria.
         """
+        if isinstance(data_type, list) or isinstance(data_type, tuple):
+            for dt in data_type:
+                yield from self.iterate(dt, filter_endings, min_layer)
+            return
+
         if self.data_type_level > 0 and data_type is None and self.level > self.data_type_level + 1:
             for child in self.filtered_sub_dirs:
                 yield from child.iterate(data_type, filter_endings, min_layer)
         elif self.data_type_level > 0 and data_type is not None and self.is_data_type_level_parent:
             if data_type is None:
-                raise ValueError(f"Data branch name must be provided when iterating over data level '{self.name}'.")
+                raise ValueError(f"Data branch name must be provided when iterating at data level '{self.name}'.")
             child = self.get_sub_dir(data_type)
             yield from child.iterate(data_type, filter_endings, min_layer)
         else:
@@ -743,28 +752,36 @@ class GGFile:
 
 
 class GGBulkBase(ABC):
+    """Abstract base class defining the bulk transaction operations across dataset groups."""
+
     @abstractmethod
     def write(self, ref_file: GGFile, data: Any) -> None:
+        """Write row data mapped to a specific target reference file."""
         pass
 
     @abstractmethod
     def read_dataframe(self) -> pd.DataFrame:
+        """Read the bulk collection items and return them unified as a pandas DataFrame."""
         pass
 
     @abstractmethod
     def read_dict(self) -> Dict[str, Any]:
+        """Read and aggregate all bulk dataset file content into a unified dictionary structure."""
         pass
 
     @abstractmethod
     def flush(self) -> None:
+        """Commit buffered internal memory records into permanent storage on disk."""
         pass
 
     @abstractmethod
     def read_for_file(self, ref_file: GGFile) -> Optional[Dict[str, Any]]:
+        """Look up and retrieve bulk structured data stored for a unique reference file."""
         pass
 
     @abstractmethod
     def get_existing_files_set(self) -> set[str]:
+        """Collect all baseline reference files registered inside the storage document."""
         pass
 
     def __enter__(self) -> Self:
@@ -775,6 +792,7 @@ class GGBulkBase(ABC):
 
     @abstractmethod
     def iter(self) -> Iterator[Tuple[GGFile, Dict[str, Any]]]:
+        """Iterate over row content, returning pairs of active GGFiles and row dictionaries."""
         pass
 
     def __iter__(self) -> Iterator[Tuple[GGFile, Dict[str, Any]]]:
@@ -795,6 +813,15 @@ class GGBulkCollectionBase(GGBulkBase, ABC, Generic[T]):
         rel_paths: bool = False,
         write_root: GGDir | None = None,
     ) -> None:
+        """Initialize the bulk context spanning a targeted hierarchy layer.
+
+        Args:
+            file_name: The target file name to be written under the target level directories.
+            layer: Integer index representing tree level context.
+            data_root: Root dataset folder wrapper.
+            rel_paths: Flag stating whether reference items use relative paths.
+            write_root: Mirroring directory root where storage outputs should take place.
+        """
         if layer < 1:
             raise ValueError("Layer must be >= 1.")
         self.file_name = file_name
@@ -902,6 +929,7 @@ class GGBulkCollectionBase(GGBulkBase, ABC, Generic[T]):
         return existing_files
 
     def flush(self) -> None:
+        """Flush changes across all active nested file contexts to disk."""
         for bulk_file in self.files.values():
             bulk_file.flush()
 
@@ -936,16 +964,24 @@ class GGBulkSingleFileBase(GGBulkBase, GGFile, ABC):
     """Base class for bulk writers that manage a single file within a GGDir."""
 
     def __init__(self, ggdir: GGDir, parent: GGBulkCollectionBase) -> None:
+        """Initialize single bulk tracking target link.
+
+        Args:
+            ggdir: Parent directory node structure.
+            parent: Spanning aggregate collection tracking manager.
+        """
         self.ggdir = ggdir
         self.parent = parent
         GGFile.__init__(self, ggdir, parent.file_name)
 
     def _store_filename(self, ref_file: GGFile) -> str:
+        """Normalize key indexing string based on relative paths parameter configuration."""
         if self.parent.rel_paths:
             return str(ref_file.abs_path.relative_to(self.ggdir.abs_path))
         return str(ref_file.rel_path)
 
     def _normalize_filename(self, filename: str) -> str:
+        """Format an stored record index key string back into standard form."""
         if self.parent.rel_paths:
             return str((self.ggdir.rel_path / Path(filename)).as_posix())
         return filename
@@ -962,6 +998,8 @@ class GGBulkSingleFileBase(GGBulkBase, GGFile, ABC):
 
 
 class GGBulkCsvFileCollection(GGBulkCollectionBase["GGBulkCsvSingleFile"]):
+    """A collection that manages group aggregation across directory layouts via individual CSV sheets."""
+
     def __init__(
         self,
         root: GGDir,
@@ -972,6 +1010,7 @@ class GGBulkCsvFileCollection(GGBulkCollectionBase["GGBulkCsvSingleFile"]):
         caching: bool = False,
         write_root: GGSet | None = None,
     ) -> None:
+        """Initialize the CSV collection supervisor tracking target layer tiers."""
         if not file_name.endswith(".csv"):
             file_name += ".csv"
         super().__init__(file_name=file_name, layer=layer, data_root=root, rel_paths=rel_paths, write_root=write_root)
@@ -979,6 +1018,7 @@ class GGBulkCsvFileCollection(GGBulkCollectionBase["GGBulkCsvSingleFile"]):
         self.caching = caching
 
     def _create_bulk_file(self, ggdir: GGDir) -> "GGBulkCsvSingleFile | GGBulkCachingCsvFileCollection":
+        """Instantiate tracking wrapper handler variants matching caching preferences."""
         if self.caching:
             return GGBulkCachingCsvFileCollection(ggdir, self)
         else:
@@ -986,21 +1026,21 @@ class GGBulkCsvFileCollection(GGBulkCollectionBase["GGBulkCsvSingleFile"]):
 
 
 class GGBulkCsvSingleFile(GGBulkSingleFileBase):
-    def __init__(
-        self,
-        ggdir: GGDir,
-        parent: GGBulkCsvFileCollection,
-    ) -> None:
+    """A bulk CSV writer/reader that appends data lines tracking row values straight onto filesystem streams."""
+
+    def __init__(self, ggdir: GGDir, parent: GGBulkCsvFileCollection) -> None:
+        """Initialize local file storage handler binding."""
         super().__init__(ggdir, parent)
         self.parent = parent
         self.handler = None
         self.cols = self._read_column_names()
 
     def _read_column_names(self) -> Optional[List[str]]:
+        """Parse headers from active file structure on disk if present."""
         if self.abs_path.exists() and self.abs_path.is_file():
             with self.abs_path.open() as f:
                 header = f.readline().strip().split(",")
-                if len(header) == 0:
+                if len(header) == 0 or header[0] == "":
                     return None
                 if header[0] != self.parent.filename_col_name:
                     raise ValueError(
@@ -1010,6 +1050,7 @@ class GGBulkCsvSingleFile(GGBulkSingleFileBase):
         return None
 
     def write(self, ref_file: GGFile, data: Any) -> None:
+        """Append a record line mapping reference data directly onto the end of the CSV sheet file."""
         if not isinstance(data, dict):
             raise TypeError("Dynamic CSV bulk writers expect dictionary row data.")
         filename = self._store_filename(ref_file)
@@ -1030,6 +1071,7 @@ class GGBulkCsvSingleFile(GGBulkSingleFileBase):
         self.handler.write(",".join(row) + "\n")
 
     def read_dataframe(self) -> pd.DataFrame:
+        """Read current document and return entries as structured DataFrame dataset."""
         self.flush()
         df = pd.read_csv(self.abs_path)
         df[self.parent.filename_col_name] = df[self.parent.filename_col_name].apply(
@@ -1038,6 +1080,7 @@ class GGBulkCsvSingleFile(GGBulkSingleFileBase):
         return df
 
     def read_dict(self) -> Dict[str, Any]:
+        """Convert flat tabular file dataset layout back to row dictionaries."""
         df = self.read_dataframe()
         result = {}
         for _, row in df.iterrows():
@@ -1046,10 +1089,12 @@ class GGBulkCsvSingleFile(GGBulkSingleFileBase):
         return result
 
     def flush(self) -> None:
+        """Flush the active text storage buffers onto the file system."""
         if self.handler is not None:
             self.handler.flush()
 
     def read_for_file(self, ref_file: GGFile) -> Optional[Dict[str, Any]]:
+        """Look up reference match keys line-by-line directly across row data."""
         if not ref_file.abs_path.is_relative_to(self.ggdir.abs_path):
             raise GGFileNotFoundError(f"File '{ref_file.rel_path}' is not in bulk branch '{self.ggdir.rel_path}'.")
         self.flush()
@@ -1069,6 +1114,7 @@ class GGBulkCsvSingleFile(GGBulkSingleFileBase):
         return None
 
     def get_existing_files_set(self) -> set[str]:
+        """Scan file key indexes directly from first value items column."""
         self.flush()
         existing_files = set()
         with self.abs_path.open() as f:
@@ -1095,16 +1141,16 @@ class GGBulkCsvSingleFile(GGBulkSingleFileBase):
 
 
 class GGBulkCachingCsvFileCollection(GGBulkSingleFileBase):
-    def __init__(
-        self,
-        ggdir: GGDir,
-        parent: GGBulkCsvFileCollection,
-    ) -> None:
+    """An optimized variant of the bulk CSV tracking node that uses an in-memory DataFrame cache before flushing data."""
+
+    def __init__(self, ggdir: GGDir, parent: GGBulkCsvFileCollection) -> None:
+        """Initialize the caching CSV tracking wrapper node."""
         super().__init__(ggdir, parent)
         self.parent = parent
         self.df = None
 
     def _get_df(self) -> pd.DataFrame | None:
+        """Safely fetch or populate target DataFrame instance data from file disk."""
         if self.df is None:
             if self.abs_path.exists():
                 if not self.abs_path.is_file():
@@ -1115,6 +1161,7 @@ class GGBulkCachingCsvFileCollection(GGBulkSingleFileBase):
         return self.df
 
     def write(self, ref_file: GGFile, data: Any) -> None:
+        """Cache tracking values into memory matrix space, overriding existing match elements."""
         if not isinstance(data, dict):
             raise TypeError("Dynamic CSV bulk writers expect dictionary row data.")
         filename = self._store_filename(ref_file)
@@ -1129,6 +1176,7 @@ class GGBulkCachingCsvFileCollection(GGBulkSingleFileBase):
             self.df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
 
     def read_dataframe(self) -> pd.DataFrame:
+        """Return the managed cache contents structured as a pandas DataFrame."""
         df = self._get_df()
         if df is None:
             return pd.DataFrame(columns=[self.parent.filename_col_name])
@@ -1139,6 +1187,7 @@ class GGBulkCachingCsvFileCollection(GGBulkSingleFileBase):
         return df
 
     def read_dict(self) -> Dict[str, Any]:
+        """Convert table data segments into mapped dataset dictionaries."""
         df = self.read_dataframe()
         result = {}
         for _, row in df.iterrows():
@@ -1147,10 +1196,12 @@ class GGBulkCachingCsvFileCollection(GGBulkSingleFileBase):
         return result
 
     def flush(self) -> None:
+        """Serialize data matrices down out to file disk records."""
         if self.df is not None:
             self.df.to_csv(self.abs_path, index=False)
 
     def read_for_file(self, ref_file: GGFile) -> Optional[Dict[str, Any]]:
+        """Look up reference file rows inside the memory matrix scope."""
         df = self._get_df()
         if df is None:
             return None
@@ -1161,6 +1212,7 @@ class GGBulkCachingCsvFileCollection(GGBulkSingleFileBase):
         return None
 
     def get_existing_files_set(self) -> set[str]:
+        """Collect tracking keys listed under index column layout metrics."""
         df = self._get_df()
         if df is None:
             return set()
@@ -1174,28 +1226,32 @@ class GGBulkCachingCsvFileCollection(GGBulkSingleFileBase):
 
 
 class GGBulkJsonFileCollection(GGBulkCollectionBase["GGBulkJsonSingleFile"]):
+    """A collection that manages group aggregation across directory layouts via individual JSON object maps."""
+
     def __init__(
         self, root: GGDir, file_name: str, layer: int, rel_paths: bool = False, write_root: GGSet | None = None
     ) -> None:
+        """Initialize the collection tracking manager across specified layers."""
         if not file_name.endswith(".json"):
             file_name += ".json"
         super().__init__(file_name=file_name, layer=layer, data_root=root, rel_paths=rel_paths, write_root=write_root)
 
     def _create_bulk_file(self, ggdir: GGDir) -> "GGBulkJsonSingleFile":
+        """Instantiate single tracking context sheets tracking metadata segments."""
         return GGBulkJsonSingleFile(ggdir, self)
 
 
 class GGBulkJsonSingleFile(GGBulkSingleFileBase):
-    def __init__(
-        self,
-        ggdir: GGDir,
-        parent: GGBulkJsonFileCollection,
-    ):
+    """A bulk JSON writer/reader that maps key indices directly to nested record fields."""
+
+    def __init__(self, ggdir: GGDir, parent: GGBulkJsonFileCollection):
+        """Initialize local file storage handler binding."""
         super().__init__(ggdir, parent)
         self.parent = parent
         self.data = self._read_json_file()
 
     def _read_json_file(self) -> Dict[str, Dict[str, Any]]:
+        """Read document entries off disk storage structures."""
         if self.abs_path.exists():
             loaded = self.read_json()
             if not isinstance(loaded, dict):
@@ -1211,6 +1267,7 @@ class GGBulkJsonSingleFile(GGBulkSingleFileBase):
         return data
 
     def _update_data(self) -> None:
+        """Merge memory tracking record dictionaries cleanly with file disk logs."""
         disk_state = self._read_json_file()
         for filename, row_data in self.data.items():
             if filename in disk_state:
@@ -1220,8 +1277,9 @@ class GGBulkJsonSingleFile(GGBulkSingleFileBase):
         self.data = disk_state
 
     def write(self, ref_file: GGFile, data: Any) -> None:
+        """Stage or update dataset records for a unique target reference file key."""
         if not isinstance(data, dict):
-            raise TypeError("JSON bulk writers expect dictionary row data. Use write_list_row for list input.")
+            raise TypeError("JSON bulk writers expect a dictionary containing row data.")
         filename = self._store_filename(ref_file)
         if filename in self.data:
             self.data[filename].update(data)
@@ -1229,6 +1287,7 @@ class GGBulkJsonSingleFile(GGBulkSingleFileBase):
             self.data[filename] = data
 
     def read_dataframe(self) -> pd.DataFrame:
+        """Read file map entries and return structural dataset contents as a flat DataFrame."""
         self._update_data()
         rows = []
         for filename, row_data in self.data.items():
@@ -1238,6 +1297,7 @@ class GGBulkJsonSingleFile(GGBulkSingleFileBase):
         return pd.DataFrame(rows)
 
     def read_dict(self) -> Dict[str, Any]:
+        """Return file mapping logs as structured dictionary metrics."""
         self._update_data()
         result = {}
         for filename, row_data in self.data.items():
@@ -1246,10 +1306,12 @@ class GGBulkJsonSingleFile(GGBulkSingleFileBase):
         return result
 
     def flush(self) -> None:
+        """Serialize data logs into formatting layout maps out on disk streams."""
         self._update_data()
         self.write_json(self.data)
 
     def read_for_file(self, ref_file: GGFile) -> Optional[Dict[str, Any]]:
+        """Retrieve stored structural value maps matching reference key flags."""
         self._update_data()
         filename = self._store_filename(ref_file)
         if filename in self.data:
@@ -1257,5 +1319,6 @@ class GGBulkJsonSingleFile(GGBulkSingleFileBase):
         return None
 
     def get_existing_files_set(self) -> set[str]:
+        """Collect tracking keys listed across mapping layers."""
         self._update_data()
         return {self._normalize_filename(filename) for filename in self.data.keys()}
