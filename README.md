@@ -112,7 +112,7 @@ file.get_corresponding_file_in_same_dir(".json")
 Supports:
 
 * Reading / writing labels
-* Automatic creation of missing files (`force_create=True`)
+* Placeholder wrappers for unresolved paths (`.exists()` to check on-disk presence)
 
 ---
 

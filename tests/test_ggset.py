@@ -98,7 +98,6 @@ class TestGGDir(unittest.TestCase):
         self.assertEqual(data_dir.abs_path, self.ggset_1.root_path / "data")
 
         file = data_dir.get_file("file1.txt")
-        assert file is not None
         self.assertEqual(file.rel_path, Path("data") / "file1.txt")
         self.assertEqual(file.abs_path, self.ggset_1.root_path / "data" / "file1.txt")
 
@@ -130,7 +129,6 @@ class TestGGDir(unittest.TestCase):
                 self.assertEqual(file.read_single_float(), 1.0)
 
                 label = file.get_corresponding_file("labels", ".txt")
-                assert label is not None
                 self.assertEqual(label.read_text(), "1 2 3")
                 self.assertEqual(label.read_int_list(), [1, 2, 3])
         self.assertTrue(found, "Did not find file with content '1' in train data.")
@@ -150,7 +148,6 @@ class TestGGDir(unittest.TestCase):
                 self.assertEqual(file.read_single_float(), 1.0)
 
                 label = file.get_corresponding_file("labels", ".txt")
-                assert label is not None
                 self.assertEqual(label.read_text(), "1 2 3")
                 self.assertEqual(label.read_int_list(), [1, 2, 3])
         self.assertTrue(found, "Did not find file with content '1' in data.")
@@ -160,11 +157,9 @@ class TestGGDir(unittest.TestCase):
         _write(small_ggset_root / "data" / "file1.txt", "1")
         ggset = GGSet(small_ggset_root, data_type_level=1)
         file = ggset.get_sub_dir("data").get_file("file1.txt")
-        assert file is not None
-        file.get_corresponding_file("labels", ".txt", force_create=True).write_text("annotation for file1")
+        file.get_corresponding_file("labels", ".txt").write_text("annotation for file1")
         annotation_file = ggset.get_sub_dir("labels").get_file("file1.txt")
-        assert annotation_file is not None
-        self.assertIsNotNone(annotation_file, "Annotation file was not created.")
+        self.assertTrue(annotation_file.exists(), "Annotation file was not created.")
         self.assertEqual(annotation_file.read_text(), "annotation for file1")
         self.assertEqual(annotation_file.rel_path.parent.name, "labels")
         self.assertEqual(annotation_file.rel_path.name, "file1.txt")
@@ -175,12 +170,14 @@ class TestGGDir(unittest.TestCase):
         _write(small_ggset_root / "data" / "file1.txt", "1")
         ggset = GGSet(small_ggset_root, data_type_level=1)
         file = ggset.get_sub_dir("data").get_file("file1.txt")
-        assert file is not None
-        cor_dir = file.get_corresponding_dir("labels", force_create=True)
+        cor_dir = file.get_corresponding_dir("labels")
+        self.assertFalse(cor_dir.exists())
         self.assertEqual(str(cor_dir.rel_path), "labels/file1")
-        target_file = cor_dir.get_file("0.txt", force_create=True)
+        target_file = cor_dir.get_file("0.txt")
+        self.assertFalse(target_file.exists())
         self.assertEqual(str(target_file.rel_path), "labels/file1/0.txt")
         target_file_2 = cor_dir.get_new_sub_file(".txt")
+        self.assertFalse(target_file_2.exists())
         target_file_2.write_text("eyo")
         self.assertEqual(str(target_file_2.rel_path), "labels/file1/1.txt")
         self.assertEqual(target_file_2.read_text(), "eyo")
@@ -207,8 +204,7 @@ class TestGGDir(unittest.TestCase):
 
         for sub_dir in ["train", "test"]:
             json_file = ggset.get_sub_dir(sub_dir).get_file("bulk_data.json")
-            self.assertIsNotNone(json_file, f"JSON file not found in {sub_dir}")
-            assert json_file is not None
+            self.assertTrue(json_file.exists(), f"JSON file not found in {sub_dir}")
 
             payload = json.loads(json_file.read_text())
             self.assertIsInstance(payload, dict)
@@ -224,7 +220,6 @@ class TestGGDir(unittest.TestCase):
             self.assertEqual(set(df_sub_dir["col2"].tolist()), {v * 10 for v in expected_values})
 
         t1_file = ggset.get_sub_dir("train").get_sub_dir("data").get_file("file1.txt")
-        assert t1_file is not None
         row = bulk_writer.read_for_file(t1_file)
         assert row is not None
         self.assertEqual(row["col1"], 1)
@@ -242,7 +237,7 @@ class TestGGDir(unittest.TestCase):
         bulk_writer.flush()
 
         train_json = ggset.get_sub_dir("train").get_file("bulk_data.json")
-        assert train_json is not None
+        self.assertTrue(train_json.exists())
         payload = json.loads(train_json.read_text())
         self.assertEqual(list(payload.keys()), ["data/file1.txt"])
 
@@ -254,9 +249,10 @@ class TestGGDir(unittest.TestCase):
         _write(small_ggset_root / "data" / "file1.txt", "1")
         ggset = GGSet(small_ggset_root, data_type_level=1)
         data_dir = ggset.get_sub_dir("data")
-        assert data_dir is not None
-        new_file = data_dir.get_file("new_file.txt", force_create=True)
+        new_file = data_dir.get_file("new_file.txt")
+        self.assertFalse(new_file.exists())
         new_file.write_text("new content")
+        self.assertTrue(new_file.exists())
         self.assertEqual(new_file.read_text(), "new content")
         self.assertEqual(new_file.rel_path.name, "new_file.txt")
         self.assertEqual(new_file.rel_path.parent.name, "data")
@@ -267,15 +263,16 @@ class TestGGDir(unittest.TestCase):
         _write(small_ggset_root / "data" / "file1.txt", "1")
         ggset = GGSet(small_ggset_root, data_type_level=1)
         data_dir = ggset.get_sub_dir("data")
-        assert data_dir is not None
 
         # Create a simple image using numpy
         image = np.zeros((10, 10, 3), dtype=np.uint8)
         image[0:5, 0:5] = [255, 0, 0]  # Red square in top-left
         image[5:10, 5:10] = [0, 255, 0]  # Green square in bottom-right
 
-        new_file = data_dir.get_file("test_image.png", force_create=True)
+        new_file = data_dir.get_file("test_image.png")
+        self.assertFalse(new_file.exists())
         new_file.write_image(image)
+        self.assertTrue(new_file.exists())
         self.assertEqual(new_file.rel_path.name, "test_image.png")
         self.assertEqual(new_file.rel_path.parent.name, "data")
 
@@ -290,35 +287,33 @@ class TestGGDir(unittest.TestCase):
         _write(small_ggset_root / "data" / "db1" / "file1.txt", "1")
         ggset = GGSet(small_ggset_root, data_type_level=1)
         data_dir = ggset.get_sub_dir("data")
-        assert data_dir is not None
-        file_for_dir = data_dir.get_corresponding_file_for_this_dir("labels", ".txt", force_create=True)
+        file_for_dir = data_dir.get_corresponding_file_for_this_dir("labels", ".txt")
+        self.assertFalse(file_for_dir.exists())
         self.assertEqual(file_for_dir.rel_path.name, "data.txt")
         self.assertEqual(file_for_dir.rel_path.parent.name, "labels")
         file_for_dir.write_text("annotation for data dir")
         annotation_file = ggset.get_sub_dir("labels").get_file("data.txt")
-        self.assertIsNotNone(annotation_file, "Annotation file for data dir was not created.")
-        assert annotation_file is not None
+        self.assertTrue(annotation_file.exists(), "Annotation file for data dir was not created.")
         self.assertEqual(annotation_file.read_text(), "annotation for data dir")
 
     def test_get_dir_with_slash_in_name(self):
         small_ggset_root = Path(self._tmpdir.name) / "small_GGDir_get_dir_with_slash"
         _write(small_ggset_root / "data" / "db1" / "file1.txt", "1")
         ggset = GGSet(small_ggset_root, data_type_level=1)
-        sub_dir = ggset.get_sub_dir("data/db3", force_create=True)
+        sub_dir = ggset.get_sub_dir("data/db3")
         self.assertEqual(sub_dir.rel_path, Path("data/db3"))
-        with self.assertRaises(GGDirNotFoundError):
-            ggset.get_sub_dir("data/db4")
+        self.assertFalse(sub_dir.exists())
+        self.assertFalse(ggset.get_sub_dir("data/db4").exists())
 
     def test_get_file_with_slash_in_name(self):
         small_ggset_root = Path(self._tmpdir.name) / "small_GGDir_get_file_with_slash"
         _write(small_ggset_root / "data" / "db1" / "file1.txt", "1")
         ggset = GGSet(small_ggset_root, data_type_level=1)
         file = ggset.get_file("data/db1/file1.txt")
-        self.assertIsNotNone(file)
-        assert file is not None
+        self.assertTrue(file.exists())
         self.assertEqual(file.rel_path, Path("data/db1/file1.txt"))
         nen_existing_file = ggset.get_file("data/db1/non_existing.txt")
-        self.assertIsNone(nen_existing_file)
+        self.assertFalse(nen_existing_file.exists())
 
     def test_add_data_in_json(self):
         small_ggset_root = Path(self._tmpdir.name) / "small_GGDir_add_data_json"
@@ -326,12 +321,11 @@ class TestGGDir(unittest.TestCase):
         ggset = GGSet(small_ggset_root, data_type_level=1)
         bulk_writer = ggset.create_bulk_json_collection("bulk_data", layer=1)
         file = ggset.get_file("train/data/file1.txt")
-        assert file is not None
+        self.assertTrue(file.exists())
         bulk_writer.write(file, {"a": 1})
         bulk_writer.flush()
         json_file = ggset.get_file("bulk_data.json")
-        self.assertIsNotNone(json_file)
-        assert json_file is not None
+        self.assertTrue(json_file.exists())
         payload = json.loads(json_file.read_text())
         self.assertIsInstance(payload, dict)
         self.assertIn("train/data/file1.txt", payload)
@@ -389,7 +383,7 @@ class TestGGDir(unittest.TestCase):
                     bulk_writer.write(file, {"col3": 2, "col4": 20})
 
         bulk_data_csv_train = ggset.get_file("train/bulk_data.csv")
-        assert bulk_data_csv_train is not None
+        self.assertTrue(bulk_data_csv_train.exists())
         df_train = bulk_data_csv_train.read_dataframe()
         self.assertEqual(set(df_train.columns), {"filename", "col1", "col2"})
         self.assertEqual(df_train["filename"].tolist(), ["data/file1.txt"])
@@ -397,7 +391,7 @@ class TestGGDir(unittest.TestCase):
         self.assertEqual(df_train["col2"].tolist(), [10])
 
         bulk_data_csv_test = ggset.get_file("test/bulk_data.csv")
-        assert bulk_data_csv_test is not None
+        self.assertTrue(bulk_data_csv_test.exists())
         df_test = bulk_data_csv_test.read_dataframe()
         self.assertEqual(set(df_test.columns), {"filename", "col3", "col4"})
         self.assertEqual(df_test["filename"].tolist(), ["data/file1.txt"])
@@ -432,10 +426,207 @@ class TestGGDir(unittest.TestCase):
             for d in bulk_reader:
                 print(d)
         bulk_file = ggset.get_sub_dir("train").get_file("bulk_data.csv")
-        assert bulk_file is not None
+        self.assertTrue(bulk_file.exists())
         df = bulk_file.read_dataframe()
         self.assertEqual(df["filename"].tolist(), ["file1.txt"])
         self.assertEqual(df["col1"].tolist(), [3])
+
+    # ------------------------------------------------------------------
+    # Tests for target_set parameter on get_corresponding_* methods
+    # ------------------------------------------------------------------
+
+    def test_get_corresponding_file_in_target_set(self):
+        """get_corresponding_file with target_set resolves into the alternate set."""
+        source_root = Path(self._tmpdir.name) / "src_corr_file"
+        target_root = Path(self._tmpdir.name) / "tgt_corr_file"
+        source_root_resolved = source_root.resolve()
+        target_root_resolved = target_root.resolve()
+        _write(source_root / "data" / "file1.txt", "1")
+        source = GGSet(source_root, data_type_level=1)
+        target = GGSet(target_root, data_type_level=1)
+
+        src_file = source.get_sub_dir("data").get_file("file1.txt")
+        result = src_file.get_corresponding_file("labels", ".txt", target_set=target)
+
+        # Path must be in the target set, not the source set
+        self.assertTrue(result.abs_path.is_relative_to(target_root_resolved))
+        self.assertFalse(result.abs_path.is_relative_to(source_root_resolved))
+        self.assertEqual(result.rel_path, Path("labels") / "file1.txt")
+        self.assertFalse(result.exists())
+
+        # Writing should create the file in the target set
+        result.write_text("annotation")
+        self.assertTrue(result.exists())
+        self.assertFalse((source_root_resolved / "labels" / "file1.txt").exists())
+
+    def test_get_corresponding_dir_in_target_set(self):
+        """get_corresponding_dir with target_set resolves into the alternate set."""
+        source_root = Path(self._tmpdir.name) / "src_corr_dir"
+        target_root = Path(self._tmpdir.name) / "tgt_corr_dir"
+        source_root_resolved = source_root.resolve()
+        target_root_resolved = target_root.resolve()
+        _write(source_root / "data" / "file1.txt", "1")
+        source = GGSet(source_root, data_type_level=1)
+        target = GGSet(target_root, data_type_level=1)
+
+        src_file = source.get_sub_dir("data").get_file("file1.txt")
+        result = src_file.get_corresponding_dir("labels", target_set=target)
+
+        self.assertTrue(result.abs_path.is_relative_to(target_root_resolved))
+        self.assertFalse(result.abs_path.is_relative_to(source_root_resolved))
+        self.assertEqual(result.rel_path, Path("labels") / "file1")
+        self.assertFalse(result.exists())
+
+    def test_get_corresponding_file_in_same_dir_in_target_set(self):
+        """get_corresponding_file_in_same_dir with target_set resolves into the alternate set."""
+        source_root = Path(self._tmpdir.name) / "src_same_dir"
+        target_root = Path(self._tmpdir.name) / "tgt_same_dir"
+        source_root_resolved = source_root.resolve()
+        target_root_resolved = target_root.resolve()
+        _write(source_root / "data" / "file1.txt", "1")
+        source = GGSet(source_root)
+        target = GGSet(target_root)
+
+        src_file = source.get_sub_dir("data").get_file("file1.txt")
+        result = src_file.get_corresponding_file_in_same_dir(".csv", target_set=target)
+
+        self.assertTrue(result.abs_path.is_relative_to(target_root_resolved))
+        self.assertFalse(result.abs_path.is_relative_to(source_root_resolved))
+        self.assertEqual(result.rel_path, Path("data") / "file1.csv")
+        self.assertFalse(result.exists())
+
+        result.write_text("a,b\n1,2")
+        self.assertTrue(result.exists())
+        self.assertFalse((source_root_resolved / "data" / "file1.csv").exists())
+
+    def test_get_corresponding_dir_in_same_dir_in_target_set(self):
+        """get_corresponding_dir_in_same_dir with target_set resolves into the alternate set."""
+        source_root = Path(self._tmpdir.name) / "src_same_dir2"
+        target_root = Path(self._tmpdir.name) / "tgt_same_dir2"
+        source_root_resolved = source_root.resolve()
+        target_root_resolved = target_root.resolve()
+        _write(source_root / "data" / "file1.txt", "1")
+        source = GGSet(source_root)
+        target = GGSet(target_root)
+
+        src_file = source.get_sub_dir("data").get_file("file1.txt")
+        result = src_file.get_corresponding_dir_in_same_dir(target_set=target)
+
+        self.assertTrue(result.abs_path.is_relative_to(target_root_resolved))
+        self.assertFalse(result.abs_path.is_relative_to(source_root_resolved))
+        self.assertEqual(result.rel_path, Path("data") / "file1")
+        self.assertFalse(result.exists())
+
+    def test_get_corresponding_file_for_this_dir_in_target_set(self):
+        """get_corresponding_file_for_this_dir with target_set resolves into the alternate set."""
+        source_root = Path(self._tmpdir.name) / "src_file_for_dir"
+        target_root = Path(self._tmpdir.name) / "tgt_file_for_dir"
+        source_root_resolved = source_root.resolve()
+        target_root_resolved = target_root.resolve()
+        _write(source_root / "data" / "file1.txt", "1")
+        source = GGSet(source_root, data_type_level=1)
+        target = GGSet(target_root, data_type_level=1)
+
+        data_dir = source.get_sub_dir("data")
+        result = data_dir.get_corresponding_file_for_this_dir("labels", ".txt", target_set=target)
+
+        self.assertTrue(result.abs_path.is_relative_to(target_root_resolved))
+        self.assertFalse(result.abs_path.is_relative_to(source_root_resolved))
+        self.assertEqual(result.rel_path, Path("labels") / "data.txt")
+        self.assertFalse(result.exists())
+
+        result.write_text("dir annotation")
+        self.assertTrue(result.exists())
+        self.assertFalse((source_root_resolved / "labels" / "data.txt").exists())
+
+    def test_get_corresponding_file_in_target_set_nested(self):
+        """target_set works correctly with data_type_level > 1 (nested branches)."""
+        source_root = Path(self._tmpdir.name) / "src_nested"
+        target_root = Path(self._tmpdir.name) / "tgt_nested"
+        target_root_resolved = target_root.resolve()
+        source_root_resolved = source_root.resolve()
+        _write(source_root / "db1" / "data" / "file1.txt", "1")
+        source = GGSet(source_root, data_type_level=2)
+        target = GGSet(target_root, data_type_level=2)
+
+        src_file = source.get_sub_dir("db1").get_sub_dir("data").get_file("file1.txt")
+        result = src_file.get_corresponding_file("labels", ".csv", target_set=target)
+
+        self.assertTrue(result.abs_path.is_relative_to(target_root_resolved))
+        self.assertEqual(result.rel_path, Path("db1") / "labels" / "file1.csv")
+        self.assertFalse(result.exists())
+
+        result.write_text("x,y\n1,2")
+        self.assertTrue(result.exists())
+        self.assertFalse((source_root_resolved / "db1" / "labels" / "file1.csv").exists())
+
+    def test_bulk_csv_write_root(self):
+        """CSV bulk collection with write_root writes annotations to a separate GGSet."""
+        source_root = Path(self._tmpdir.name) / "src_bulk_csv"
+        annot_root = Path(self._tmpdir.name) / "annot_bulk_csv"
+        source_root_resolved = source_root.resolve()
+        annot_root_resolved = annot_root.resolve()
+        _write(source_root / "train" / "data" / "file1.txt", "1")
+        _write(source_root / "train" / "data" / "file2.txt", "2")
+        _write(source_root / "test" / "data" / "file1.txt", "3")
+
+        source = GGSet(source_root, data_type_level=2)
+        annot = GGSet(annot_root, data_type_level=2)
+
+        with source.create_bulk_csv_collection("annot.csv", layer=2, write_root=annot) as bulk:
+            for file in source.iterate("data"):
+                bulk.write(file, {"score": int(file.read_text())})
+
+        # CSV files must be in the annotation set, not the source set
+        self.assertTrue((annot_root_resolved / "train" / "annot.csv").exists())
+        self.assertTrue((annot_root_resolved / "test" / "annot.csv").exists())
+        self.assertFalse((source_root_resolved / "train" / "annot.csv").exists())
+        self.assertFalse((source_root_resolved / "test" / "annot.csv").exists())
+
+        # iter() must yield GGFiles from the source set
+        with source.create_bulk_csv_collection("annot.csv", layer=2, write_root=annot) as bulk:
+            items = list(bulk)
+        self.assertEqual(len(items), 3)
+        for src_file, data in items:
+            self.assertTrue(src_file.abs_path.is_relative_to(source_root_resolved))
+            self.assertIn("score", data)
+
+    def test_bulk_json_write_root(self):
+        """JSON bulk collection with write_root writes annotations to a separate GGSet."""
+        source_root = Path(self._tmpdir.name) / "src_bulk_json"
+        annot_root = Path(self._tmpdir.name) / "annot_bulk_json"
+        source_root_resolved = source_root.resolve()
+        annot_root_resolved = annot_root.resolve()
+        _write(source_root / "train" / "data" / "file1.txt", "10")
+        _write(source_root / "test" / "data" / "file1.txt", "20")
+
+        source = GGSet(source_root, data_type_level=2)
+        annot = GGSet(annot_root, data_type_level=2)
+
+        bulk = source.create_bulk_json_collection("annot.json", layer=2, write_root=annot)
+        for file in source.iterate("data"):
+            bulk.write(file, {"value": int(file.read_text())})
+        bulk.flush()
+
+        # JSON files must be in the annotation set, not the source set
+        self.assertTrue((annot_root_resolved / "train" / "annot.json").exists())
+        self.assertTrue((annot_root_resolved / "test" / "annot.json").exists())
+        self.assertFalse((source_root_resolved / "train" / "annot.json").exists())
+        self.assertFalse((source_root_resolved / "test" / "annot.json").exists())
+
+        # read_for_file must resolve the annotation from write_root
+        train_file = source.get_sub_dir("train").get_sub_dir("data").get_file("file1.txt")
+        row = bulk.read_for_file(train_file)
+        self.assertIsNotNone(row)
+        assert row is not None
+        self.assertEqual(row["value"], 10)
+
+        # iter() must yield GGFiles from the source set
+        items = list(bulk)
+        self.assertEqual(len(items), 2)
+        for src_file, data in items:
+            self.assertTrue(src_file.abs_path.is_relative_to(source_root_resolved))
+            self.assertIn("value", data)
 
 
 if __name__ == "__main__":
