@@ -225,14 +225,22 @@ class GGDir:
         return self.level == self.data_type_level - 1
 
     @property
-    def data_type(self) -> Optional[GGDir]:
+    def data_type_dir(self) -> Optional[GGDir]:
         """Return the data type of this node"""
         if self.level == self.data_type_level:
             return self
         elif self.parent is not None:
-            return self.parent.data_type
+            return self.parent.data_type_dir
         else:
             return None
+
+    @property
+    def data_type(self) -> Optional[str]:
+        """Return the data type name of this node"""
+        data_type_dir = self.data_type_dir
+        if data_type_dir is not None:
+            return data_type_dir.name
+        return None
 
     def get_file(self, filename: str) -> GGFile:
         """Return a file wrapper from this directory.
@@ -590,6 +598,11 @@ class GGFile:
     def rel_path(self) -> Path:
         """Return the path from the GGDir root to this file."""
         return self.ggdir.rel_path / self.file_name
+
+    @property
+    def data_type(self) -> Optional[str]:
+        """Return the data type of this file, derived from its GGDir."""
+        return self.ggdir.data_type
 
     def exists(self) -> bool:
         """Return ``True`` when this file exists on disk."""
