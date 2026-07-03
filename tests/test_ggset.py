@@ -628,6 +628,94 @@ class TestGGDir(unittest.TestCase):
             self.assertTrue(src_file.abs_path.is_relative_to(source_root_resolved))
             self.assertIn("value", data)
 
+    def test_bulk_csv_file_is_lazy_created_only_on_write(self):
+        """CSV bulk wrapper is always returned (never None) and file is created only after data is written."""
+        root = Path(self._tmpdir.name) / "bulk_lazy_csv"
+        _write(root / "train" / "data" / "file1.txt", "1")
+        ggset = GGSet(root, data_type_level=2)
+
+        with ggset.create_bulk_csv_collection("bulk_data", layer=2) as bulk:
+            train_dir = ggset.get_sub_dir("train")
+            # create=False must now return an object for CSV collections
+            bulk_file = bulk.get_bulk_file(train_dir)
+            self.assertIsNotNone(bulk_file)
+            assert bulk_file is not None
+            self.assertFalse(bulk_file.exists())
+
+            # read operations on a not-yet-existing file must return empty/None
+            data_file = ggset.get_file("train/data/file1.txt")
+            self.assertIsNone(bulk_file.read_for_file(data_file))
+            self.assertTrue(bulk_file.read_dataframe().empty)
+            self.assertEqual(bulk_file.read_dict(), {})
+            self.assertEqual(bulk_file.get_existing_files_set(), set())
+
+        # No rows were written, so the file must still not exist.
+        self.assertFalse(ggset.get_file("train/bulk_data.csv").exists())
+
+        with ggset.create_bulk_csv_collection("bulk_data", layer=2) as bulk:
+            data_file = ggset.get_file("train/data/file1.txt")
+            bulk.write(data_file, {"v": 1})
+
+        self.assertTrue(ggset.get_file("train/bulk_data.csv").exists())
+
+    def test_bulk_csv_caching_file_is_lazy_created_only_on_write(self):
+        """Caching CSV bulk wrapper is always returned (never None) and file is created only after data is written."""
+        root = Path(self._tmpdir.name) / "bulk_lazy_csv_caching"
+        _write(root / "train" / "data" / "file1.txt", "1")
+        ggset = GGSet(root, data_type_level=2)
+
+        with ggset.create_bulk_csv_collection("bulk_data", layer=2, caching=True) as bulk:
+            train_dir = ggset.get_sub_dir("train")
+            # create=False must return an object for caching CSV collections
+            bulk_file = bulk.get_bulk_file(train_dir)
+            self.assertIsNotNone(bulk_file)
+            assert bulk_file is not None
+            self.assertFalse(bulk_file.exists())
+
+            # read operations must return empty/None before file is written
+            data_file = ggset.get_file("train/data/file1.txt")
+            self.assertIsNone(bulk_file.read_for_file(data_file))
+            self.assertTrue(bulk_file.read_dataframe().empty)
+            self.assertEqual(bulk_file.read_dict(), {})
+            self.assertEqual(bulk_file.get_existing_files_set(), set())
+
+        # No rows written → file must not exist
+        self.assertFalse(ggset.get_file("train/bulk_data.csv").exists())
+
+        with ggset.create_bulk_csv_collection("bulk_data", layer=2, caching=True) as bulk:
+            data_file = ggset.get_file("train/data/file1.txt")
+            bulk.write(data_file, {"v": 1})
+
+        self.assertTrue(ggset.get_file("train/bulk_data.csv").exists())
+
+    def test_bulk_json_file_is_lazy_created_only_on_write(self):
+        """JSON bulk wrapper is always returned (never None) and file is created only after data is written."""
+        root = Path(self._tmpdir.name) / "bulk_lazy_json"
+        _write(root / "train" / "data" / "file1.txt", "1")
+        ggset = GGSet(root, data_type_level=2)
+
+        with ggset.create_bulk_json_collection("bulk_data", layer=2) as bulk:
+            train_dir = ggset.get_sub_dir("train")
+            # get_bulk_file always returns an object now
+            bulk_file = bulk.get_bulk_file(train_dir)
+            self.assertIsNotNone(bulk_file)
+            self.assertFalse(bulk_file.exists())
+
+            # read operations before any write must return empty/None
+            data_file = ggset.get_file("train/data/file1.txt")
+            self.assertIsNone(bulk_file.read_for_file(data_file))
+            self.assertEqual(bulk_file.read_dict(), {})
+            self.assertEqual(bulk_file.get_existing_files_set(), set())
+
+        # No rows were written, so the file must still not exist.
+        self.assertFalse(ggset.get_file("train/bulk_data.json").exists())
+
+        with ggset.create_bulk_json_collection("bulk_data", layer=2) as bulk:
+            data_file = ggset.get_file("train/data/file1.txt")
+            bulk.write(data_file, {"v": 1})
+
+        self.assertTrue(ggset.get_file("train/bulk_data.json").exists())
+
 
 if __name__ == "__main__":
     unittest.main()
