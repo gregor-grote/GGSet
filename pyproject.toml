@@ -4,15 +4,15 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ggset"
-version = "0.5.2"
+version = "0.5.3"
 description = "Utilities for navigating and managing dataset folders"
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [{ name = "Gregor Grote" }]
 dependencies = [
-	"numpy>=1.26",
-	"opencv-python>=4.10",
-	"pandas>=2.2",
+	"numpy>=1.0",
+	"opencv-python>=2.0",
+	"pandas>=2.0",
 	"PyYAML>=6.0",
 ]
 
