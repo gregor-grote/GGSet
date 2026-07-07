@@ -10,7 +10,7 @@ __all__ = [
     "GGFileNotFoundError",
     "GGBulkCollection",
     "BulkFileResolverStrategy",
-    "LayerResolver",
+    "BulkFileAtLevelResolverStrategy",
     "KeyMappingStrategy",
     "DefaultKeyMappingStrategy",
     "RelativePathKeyMappingStrategy",

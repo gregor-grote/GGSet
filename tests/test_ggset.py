@@ -10,7 +10,7 @@ from src.ggset.ggset import (
     GGFile,
     GGDir,
     GGBulkCollection,
-    LayerResolver,
+    BulkFileAtLevelResolverStrategy,
     JsonStorageStrategy,
     DefaultKeyMappingStrategy,
 )

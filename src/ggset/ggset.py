@@ -47,7 +47,7 @@ __all__ = [
     "GGFileNotFoundError",
     "GGBulkCollection",
     "BulkFileResolverStrategy",
-    "LayerResolver",
+    "BulkFileAtLevelResolverStrategy",
     "KeyMappingStrategy",
     "DefaultKeyMappingStrategy",
     "RelativePathKeyMappingStrategy",
@@ -533,7 +533,7 @@ class GGDir:
 
         return GGBulkCollection(
             self,
-            bulk_file_resolver_strategy=LayerResolver(layer, file_name=name),
+            bulk_file_resolver_strategy=BulkFileAtLevelResolverStrategy(layer, file_name=name),
             storage_strategy=JsonStorageStrategy(key_strategy),
             bulk_files_root=bulk_files_root,
         )
@@ -570,7 +570,7 @@ class GGDir:
 
         return GGBulkCollection(
             self,
-            bulk_file_resolver_strategy=LayerResolver(layer, file_name=name),
+            bulk_file_resolver_strategy=BulkFileAtLevelResolverStrategy(layer, file_name=name),
             storage_strategy=storage_strategy,
             bulk_files_root=bulk_files_root,
         )
@@ -807,7 +807,7 @@ class BulkFileResolverStrategy(ABC):
         pass
 
 
-class LayerResolver(BulkFileResolverStrategy):
+class BulkFileAtLevelResolverStrategy(BulkFileResolverStrategy):
     def __init__(self, layer: int, file_name: str):
         self.layer = layer
         self.file_name = file_name
