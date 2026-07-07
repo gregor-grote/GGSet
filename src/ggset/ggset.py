@@ -46,6 +46,15 @@ __all__ = [
     "GGDirNotFoundError",
     "GGFileNotFoundError",
     "GGBulkCollection",
+    "BulkFileResolverStrategy",
+    "LayerResolver",
+    "KeyMappingStrategy",
+    "DefaultKeyMappingStrategy",
+    "RelativePathKeyMappingStrategy",
+    "BulkStorageStrategy",
+    "JsonStorageStrategy",
+    "CsvStorageStrategy",
+    "CsvCachingStorageStrategy",
 ]
 
 
@@ -524,8 +533,7 @@ class GGDir:
 
         return GGBulkCollection(
             self,
-            name,
-            resolver_strategy=LayerResolver(layer),
+            bulk_file_resolver_strategy=LayerResolver(layer, file_name=name),
             storage_strategy=JsonStorageStrategy(key_strategy),
             bulk_files_root=bulk_files_root,
         )
@@ -562,8 +570,7 @@ class GGDir:
 
         return GGBulkCollection(
             self,
-            name,
-            resolver_strategy=LayerResolver(layer),
+            bulk_file_resolver_strategy=LayerResolver(layer, file_name=name),
             storage_strategy=storage_strategy,
             bulk_files_root=bulk_files_root,
         )
@@ -786,7 +793,7 @@ class GGFile:
         return str(self.rel_path) + (" *" if not self.abs_path.exists() else "")
 
 
-class BulkFileResolver(ABC):
+class BulkFileResolverStrategy(ABC):
     """Abstract base class for resolving bulk file instances."""
 
     @abstractmethod
@@ -800,19 +807,22 @@ class BulkFileResolver(ABC):
         pass
 
 
-class LayerResolver(BulkFileResolver):
-    def __init__(self, layer: int):
+class LayerResolver(BulkFileResolverStrategy):
+    def __init__(self, layer: int, file_name: str):
         self.layer = layer
+        self.file_name = file_name
 
     def resolve(self, ref_file: GGFile, bulk_collection: "GGBulkCollection") -> GGFile:
-        d = ref_file.ggdir.ancestor_at_level(self.layer - 1).rel_path
-        target_dir = bulk_collection.bulk_files_root.get_sub_dir(d)
-        return target_dir.get_file(bulk_collection.file_name)
+        d = ref_file.ggdir.ancestor_at_level(bulk_collection.bulk_files_root.level + self.layer - 1).rel_path
+        target_dir = bulk_collection.bulk_files_root.root.get_sub_dir(d)
+        return target_dir.get_file(self.file_name)
 
     def all_files(self, bulk_collection: "GGBulkCollection") -> List[GGFile]:
         files = []
-        for dir in bulk_collection.bulk_files_root.iterate_layer(self.layer - 1):
-            f = dir.get_file(bulk_collection.file_name)
+        for dir in bulk_collection.bulk_files_root.iterate_layer(
+            bulk_collection.bulk_files_root.level + self.layer - 1
+        ):
+            f = dir.get_file(self.file_name)
             if f.exists():
                 files.append(f)
         return files
@@ -849,7 +859,7 @@ class RelativePathKeyMappingStrategy(KeyMappingStrategy):
         return str(ref_file.rel_path.relative_to(bulk_file.ggdir.rel_path))
 
     def from_store_key(self, key: str, bulk_file: GGFile, bulk_collection: "GGBulkCollection") -> str:
-        return (bulk_file.ggdir.rel_path / key).as_posix()
+        return (bulk_file.ggdir.rel_path / key).relative_to(bulk_collection.data_root.rel_path).as_posix()
 
 
 class BulkStorageStrategy(ABC):
@@ -904,26 +914,24 @@ class GGBulkCollection:
     def __init__(
         self,
         data_root: GGDir,
-        file_name: str,
-        resolver_strategy: BulkFileResolver,
+        bulk_file_resolver_strategy: BulkFileResolverStrategy,
         storage_strategy: BulkStorageStrategy,
         bulk_files_root: GGDir | None = None,
     ) -> None:
         self.data_root = data_root
-        self.file_name = file_name
-        self.resolver_strategy = resolver_strategy
+        self.bulk_file_resolver_strategy = bulk_file_resolver_strategy
         self.storage_strategy = storage_strategy
         self.bulk_files_root = bulk_files_root if bulk_files_root is not None else data_root
 
     def write(self, ref_file: GGFile, data: Any) -> None:
         """Write data for a given reference file."""
-        bulk_file = self.resolver_strategy.resolve(ref_file, self)
+        bulk_file = self.bulk_file_resolver_strategy.resolve(ref_file, self)
         self.storage_strategy.write(ref_file, bulk_file, data, self)
 
     def read_dataframe(self) -> pd.DataFrame:
         """Read data for the entire bulk collection and return it as a pandas DataFrame."""
         all_dataframes = []
-        for bulk_file in self.resolver_strategy.all_files(self):
+        for bulk_file in self.bulk_file_resolver_strategy.all_files(self):
             df = self.storage_strategy.read_dataframe(bulk_file, self)
             all_dataframes.append(df)
         if len(all_dataframes) == 0:
@@ -933,7 +941,7 @@ class GGBulkCollection:
     def read_dict(self) -> Dict[str, Any]:
         """Read data for the entire bulk collection and return it as a dictionary."""
         all_data = {}
-        for bulk_file in self.resolver_strategy.all_files(self):
+        for bulk_file in self.bulk_file_resolver_strategy.all_files(self):
             data = self.storage_strategy.read_dict(bulk_file, self)
             all_data.update(data)
         return all_data
@@ -941,14 +949,14 @@ class GGBulkCollection:
     def get_existing_files_set(self) -> set[str]:
         """Return a set of existing reference file keys in the entire bulk collection."""
         all_keys = set()
-        for bulk_file in self.resolver_strategy.all_files(self):
+        for bulk_file in self.bulk_file_resolver_strategy.all_files(self):
             keys = self.storage_strategy.get_existing_files_set(bulk_file, self)
             all_keys.update(keys)
         return all_keys
 
     def read_for_file(self, ref_file: GGFile) -> Optional[Dict[str, Any]]:
         """Read data for a specific reference file from the corresponding bulk file."""
-        bulk_file = self.resolver_strategy.resolve(ref_file, self)
+        bulk_file = self.bulk_file_resolver_strategy.resolve(ref_file, self)
         return self.storage_strategy.read_for_file(ref_file, bulk_file, self)
 
     def flush(self) -> None:
@@ -963,8 +971,9 @@ class GGBulkCollection:
 
     def iterate(self) -> Generator[Tuple[GGFile, Dict[str, Any]], None, None]:
         """Iterate over all key-value pairs in the bulk collection."""
-        for bulk_file in self.resolver_strategy.all_files(self):
+        for bulk_file in self.bulk_file_resolver_strategy.all_files(self):
             yield from self.storage_strategy.iterate(bulk_file, self)
+            self.storage_strategy.flush(self)  # to prevent memory issues when iterating over large collections
 
     def __iter__(self) -> Generator[Tuple[GGFile, Dict[str, Any]], None, None]:
         return self.iterate()
@@ -1021,7 +1030,7 @@ class JsonStorageStrategy(BulkStorageStrategy):
     def flush(self, bulk_collection: GGBulkCollection) -> None:
         for bulk_file_key, data in self.buffer.items():
             if len(data) > 0:
-                bulk_file = bulk_collection.bulk_files_root.get_file(bulk_file_key)
+                bulk_file = bulk_collection.bulk_files_root.root.get_file(bulk_file_key)
                 bulk_file.write_json(data)
         self.buffer.clear()
 
@@ -1183,7 +1192,7 @@ class CsvCachingStorageStrategy(CsvStorageStrategy):
     def flush(self, bulk_collection: GGBulkCollection) -> None:
         for key, df in self.dfs.items():
             if not df.empty:
-                bulk_file = bulk_collection.bulk_files_root.get_file(key)
+                bulk_file = bulk_collection.bulk_files_root.root.get_file(key)
                 bulk_file.touch()
                 df.to_csv(bulk_file.abs_path, index=False)
         self.dfs.clear()

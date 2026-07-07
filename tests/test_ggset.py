@@ -718,6 +718,106 @@ class TestGGDir(unittest.TestCase):
 
         self.assertTrue(ggset.get_file("train/bulk_data.json").exists())
 
+    def test_set_root_to_different_level_csv(self):
+        """Test that set_root can change the root of a GGSet to a different level."""
+        small_ggset_root = Path(self._tmpdir.name) / "small_GGDir_set_root"
+        _write(small_ggset_root / "train" / "data" / "file1.txt", "1")
+        _write(small_ggset_root / "test" / "data" / "file2.txt", "2")
+        ggset = GGSet(small_ggset_root, data_type_level=2)
+
+        with ggset.create_bulk_csv_collection("bulk_data.csv", layer=2, rel_paths=True) as bulk:
+            for file in ggset.iterate("data"):
+                bulk.write(file, {"value": int(file.read_text())})
+
+        train_annot_file = ggset.get_file("train/bulk_data.csv")
+        self.assertTrue(train_annot_file.exists())
+        train_df = train_annot_file.read_dataframe()
+        self.assertEqual(set(train_df.columns), {"filename", "value"})
+        self.assertEqual(train_df["filename"].tolist(), ["data/file1.txt"])
+
+        test_annot_file = ggset.get_file("test/bulk_data.csv")
+        self.assertTrue(test_annot_file.exists())
+        test_df = test_annot_file.read_dataframe()
+        self.assertEqual(set(test_df.columns), {"filename", "value"})
+        self.assertEqual(test_df["filename"].tolist(), ["data/file2.txt"])
+
+        with ggset.get_sub_dir("train").create_bulk_csv_collection(
+            "bulk_data.csv", layer=1, rel_paths=True, caching=True
+        ) as train_bulk:
+            df = train_bulk.read_dataframe()
+            self.assertEqual(set(df.columns), {"filename", "value"})
+            self.assertEqual(df["filename"].tolist(), ["data/file1.txt"])
+            train_bulk.write(ggset.get_file("train/data/file1.txt"), {"value2": 100})
+
+        train_df_updated = ggset.get_file("train/bulk_data.csv").read_dataframe()
+        self.assertEqual(set(train_df_updated.columns), {"filename", "value", "value2"})
+        self.assertEqual(train_df_updated["filename"].tolist(), ["data/file1.txt"])
+
+    def test_set_root_to_different_level_csv_non_caching(self):
+        """Test that set_root can change the root of a GGSet to a different level."""
+        small_ggset_root = Path(self._tmpdir.name) / "small_GGDir_set_root"
+        _write(small_ggset_root / "train" / "data" / "file1.txt", "1")
+        _write(small_ggset_root / "test" / "data" / "file2.txt", "2")
+        ggset = GGSet(small_ggset_root, data_type_level=2)
+
+        with ggset.create_bulk_csv_collection("bulk_data.csv", layer=2, rel_paths=True) as bulk:
+            for file in ggset.iterate("data"):
+                bulk.write(file, {"value": int(file.read_text())})
+
+        train_annot_file = ggset.get_file("train/bulk_data.csv")
+        self.assertTrue(train_annot_file.exists())
+        train_df = train_annot_file.read_dataframe()
+        self.assertEqual(set(train_df.columns), {"filename", "value"})
+        self.assertEqual(train_df["filename"].tolist(), ["data/file1.txt"])
+
+        test_annot_file = ggset.get_file("test/bulk_data.csv")
+        self.assertTrue(test_annot_file.exists())
+        test_df = test_annot_file.read_dataframe()
+        self.assertEqual(set(test_df.columns), {"filename", "value"})
+        self.assertEqual(test_df["filename"].tolist(), ["data/file2.txt"])
+
+        with ggset.get_sub_dir("train").create_bulk_csv_collection(
+            "bulk_data.csv", layer=1, rel_paths=True, caching=True
+        ) as train_bulk:
+            df = train_bulk.read_dataframe()
+            self.assertEqual(set(df.columns), {"filename", "value"})
+            self.assertEqual(df["filename"].tolist(), ["data/file1.txt"])
+
+    def test_set_root_to_different_level_json(self):
+        """Test that set_root can change the root of a GGSet to a different level."""
+        small_ggset_root = Path(self._tmpdir.name) / "small_GGDir_set_root"
+        _write(small_ggset_root / "train" / "data" / "file1.txt", "1")
+        _write(small_ggset_root / "test" / "data" / "file2.txt", "2")
+        ggset = GGSet(small_ggset_root, data_type_level=2)
+
+        with ggset.create_bulk_json_collection("bulk_data.json", layer=2, rel_paths=True) as bulk:
+            for file in ggset.iterate("data"):
+                bulk.write(file, {"value": int(file.read_text())})
+
+        train_annot_file = ggset.get_file("train/bulk_data.json")
+        self.assertTrue(train_annot_file.exists())
+        train_dict = train_annot_file.read_json()
+        self.assertEqual(set(train_dict.keys()), {"data/file1.txt"})
+
+        test_annot_file = ggset.get_file("test/bulk_data.json")
+        self.assertTrue(test_annot_file.exists())
+        test_dict = test_annot_file.read_json()
+        self.assertEqual(set(test_dict.keys()), {"data/file2.txt"})
+
+        with ggset.get_sub_dir("train").create_bulk_json_collection(
+            "bulk_data.json", layer=1, rel_paths=True
+        ) as train_bulk:
+            df = train_bulk.read_dataframe()
+            self.assertEqual(set(df.columns), {"filename", "value"})
+            self.assertEqual(df["filename"].tolist(), ["data/file1.txt"])
+            train_bulk.write(ggset.get_file("train/data/file1.txt"), {"value2": 100})
+
+        train_dict_updated = ggset.get_file("train/bulk_data.json").read_json()
+        self.assertEqual(set(train_dict_updated.keys()), {"data/file1.txt"})
+        data = train_dict_updated["data/file1.txt"]
+        self.assertEqual(data["value"], 1)
+        self.assertEqual(data["value2"], 100)
+
 
 if __name__ == "__main__":
     unittest.main()
