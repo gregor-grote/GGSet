@@ -12,6 +12,7 @@ This module provides a suite of classes for structured dataset management:
 
 from __future__ import annotations
 
+from io import TextIOWrapper
 from typing import (
     Any,
     Dict,
@@ -32,6 +33,7 @@ from pathlib import Path
 import cv2
 import json
 import yaml
+import csv
 import pandas as pd
 from abc import ABC, abstractmethod
 import numpy as np
@@ -43,9 +45,7 @@ __all__ = [
     "GGNotFoundError",
     "GGDirNotFoundError",
     "GGFileNotFoundError",
-    "GGBulkBase",
-    "GGBulkJsonFileCollection",
-    "GGBulkCsvFileCollection",
+    "GGBulkCollection",
 ]
 
 
@@ -71,7 +71,8 @@ class GGDir:
         data_type_level: int = -1,
         level: int = 0,
     ) -> None:
-        """Initialize a GGDir node and eagerly build its children.
+        """Initialize a GGDir node.
+        Children are not populated until ``sub_dirs`` is accessed, allowing for lazy loading of the directory tree.
 
         Args:
             path: Directory represented by this node.
@@ -85,7 +86,7 @@ class GGDir:
         ), "Only the root node can have level 0, and it must be an instance of GGSet."
         input_path = Path(path)
         self.parent = parent
-        self.sub_dirs: List[GGDir] = []
+        self._sub_dirs: Optional[List[GGDir]] = None
         self.data_type_level = data_type_level
         self.level = level
         if self.parent is None:
@@ -106,10 +107,17 @@ class GGDir:
         """Return the absolute filesystem path for this node."""
         return self.root.root_path / self.rel_path
 
-    def _build(self) -> None:
+    @property
+    def sub_dirs(self) -> List[GGDir]:
+        """Return the list of subdirectory nodes."""
+        if self._sub_dirs is None:
+            return self._build()
+        return self._sub_dirs
+
+    def _build(self) -> List[GGDir]:
         """Populate ``sub_dirs`` with subdirectory nodes."""
         if not self.abs_path.exists():
-            return
+            return []
         if not self.abs_path.is_dir():
             raise ValueError(f"Expected '{self.abs_path}' to be a directory, but it is a file.")
         for item in self.abs_path.iterdir():
@@ -120,32 +128,21 @@ class GGDir:
                     data_type_level=self.data_type_level,
                     level=self.level + 1,
                 )
-                self.sub_dirs.append(child)
+                if self._sub_dirs is None:
+                    self._sub_dirs = []
+                self._sub_dirs.append(child)
+        if self._sub_dirs is None:
+            self._sub_dirs = []
+        return self._sub_dirs
 
-    @staticmethod
-    def _navigate_rel_path(start: GGDir, rel_path: Path) -> GGDir:
-        """Walk *start* down the parts of *rel_path* using get_sub_dir.
-
-        Parts that are empty or ``'.'`` are skipped so that navigating a
-        ``Path('.')`` (i.e. the root) simply returns *start* unchanged.
-
-        Args:
-            start: The GGDir to begin navigation from.
-            rel_path: Relative path whose parts are traversed one by one.
-        """
-        current = start
-        for part in rel_path.parts:
-            if part in ("", "."):
-                continue
-            current = current.get_sub_dir(part)
-        return current
-
-    def get_sub_dir(self, name: str) -> GGDir:
+    def get_sub_dir(self, name: str | Path) -> GGDir:
         """Return a direct child node by name.
 
         Args:
             name: Child directory name. Supports forward-slash separated paths.
         """
+        if isinstance(name, Path):
+            name = name.as_posix()
         if "/" in name:
             name_parts = name.split("/")
             name = name_parts[0]
@@ -174,7 +171,18 @@ class GGDir:
 
     def exists(self) -> bool:
         """Return ``True`` when this directory exists on disk."""
-        return self.abs_path.exists() and self.abs_path.is_dir()
+        if self.abs_path.exists():
+            if not self.abs_path.is_dir():
+                raise ValueError(f"Expected '{self.abs_path}' to be a directory, but it is a file.")
+            return True
+        return False
+
+    def touch(self) -> Self:
+        """Create the directory on disk if it does not exist."""
+        if self.abs_path.exists() and not self.abs_path.is_dir():
+            raise ValueError(f"Expected '{self.abs_path}' to be a directory, but it is a file.")
+        self.abs_path.mkdir(parents=True, exist_ok=True)
+        return self
 
     def all_files_paths(self, rec: bool = True) -> List[Path]:
         """Return file paths in this node and, optionally, its descendants.
@@ -242,12 +250,15 @@ class GGDir:
             return data_type_dir.name
         return None
 
-    def get_file(self, filename: str) -> GGFile:
+    def get_file(self, filename: str | Path) -> GGFile:
         """Return a file wrapper from this directory.
 
         Args:
             filename: Basename of the target file. Supports forward-slash separated paths.
         """
+        if isinstance(filename, Path):
+            filename = filename.as_posix()
+
         if "/" in filename:
             parts = filename.split("/")
             dir_parts = "/".join(parts[:-1])
@@ -280,9 +291,7 @@ class GGDir:
                 the source set, mirroring the same relative structure.
         """
         data_level = self.data_type_level_parent
-        target_data_level = (
-            GGDir._navigate_rel_path(target_set, data_level.rel_path) if target_set is not None else data_level
-        )
+        target_data_level = target_set.get_sub_dir(data_level.rel_path) if target_set is not None else data_level
         rel_path = cur_file.relative_to(data_level.abs_path)
         final_GGDir = target_data_level.get_sub_dir(data_type)
 
@@ -304,9 +313,7 @@ class GGDir:
                 of the source set, mirroring the same relative structure.
         """
         data_level = self.data_type_level_parent
-        target_data_level = (
-            GGDir._navigate_rel_path(target_set, data_level.rel_path) if target_set is not None else data_level
-        )
+        target_data_level = target_set.get_sub_dir(data_level.rel_path) if target_set is not None else data_level
         rel_path = cur_file.relative_to(data_level.abs_path)
         final_GGDir = target_data_level.get_sub_dir(data_type)
 
@@ -332,9 +339,7 @@ class GGDir:
                 the source set, mirroring the same relative structure.
         """
         data_level = self.data_type_level_parent
-        target_data_level = (
-            GGDir._navigate_rel_path(target_set, data_level.rel_path) if target_set is not None else data_level
-        )
+        target_data_level = target_set.get_sub_dir(data_level.rel_path) if target_set is not None else data_level
         rel_path = self.abs_path.relative_to(data_level.abs_path)
         final_GGDir = target_data_level.get_sub_dir(data_type)
 
@@ -501,18 +506,29 @@ class GGDir:
         return str(self.rel_path)
 
     def create_bulk_json_collection(
-        self, name: str, layer: int, rel_paths: bool = False, write_root: GGSet | None = None
-    ) -> GGBulkJsonFileCollection:
-        """Create a GGBulkJsonFileCollection for writing or reading rows to JSON files across a layer.
+        self, name: str, layer: int, rel_paths: bool = False, bulk_files_root: GGSet | None = None
+    ) -> GGBulkCollection:
+        """Create a GGBulkCollection for writing or reading rows to JSON files across a layer.
 
         Args:
             name: Name of the bulk collection file (e.g., "bulk_data.json").
             layer: Layer at which to create the bulk collection.
             rel_paths: If True, store relative paths in the bulk collection; otherwise, store absolute paths.
-            write_root: Optional GGSet to write annotation files into instead of the source set.
+            bulk_files_root: Optional GGSet to write annotation files into instead of the source set.
                 Useful when the source dataset is read-only.
         """
-        return GGBulkJsonFileCollection(self, name, layer, rel_paths=rel_paths, write_root=write_root)
+        if rel_paths:
+            key_strategy = RelativePathKeyMappingStrategy()
+        else:
+            key_strategy = DefaultKeyMappingStrategy()
+
+        return GGBulkCollection(
+            self,
+            name,
+            resolver_strategy=LayerResolver(layer),
+            storage_strategy=JsonStorageStrategy(key_strategy),
+            bulk_files_root=bulk_files_root,
+        )
 
     def create_bulk_csv_collection(
         self,
@@ -521,9 +537,9 @@ class GGDir:
         rel_paths: bool = False,
         filename_col_name: str = "filename",
         caching: bool = False,
-        write_root: GGSet | None = None,
-    ) -> GGBulkCsvFileCollection:
-        """Create a GGBulkCsvFileCollection for writing or reading rows to CSV files across a layer.
+        bulk_files_root: GGSet | None = None,
+    ) -> GGBulkCollection:
+        """Create a GGBulkCollection for writing or reading rows to CSV files across a layer.
 
         Args:
             name: Name of the bulk collection file (e.g., "bulk_data.csv").
@@ -531,17 +547,25 @@ class GGDir:
             rel_paths: If True, store relative paths in the bulk collection; otherwise, store absolute paths.
             filename_col_name: Name of the column that stores file names in the CSV.
             caching: If True, enable caching for the bulk collection. Warning: when caching=True, and you call write with an file that already exists in the bulk collection, the new data will overwrite the old data. When caching=False, the new data will be appended to the bulk collection, and you will have to handle duplicates yourself.
-            write_root: Optional GGSet to write annotation files into instead of the source set.
+            bulk_files_root: Optional GGSet to write annotation files into instead of the source set.
                 Useful when the source dataset is read-only.
         """
-        return GGBulkCsvFileCollection(
+        if rel_paths:
+            key_strategy = RelativePathKeyMappingStrategy()
+        else:
+            key_strategy = DefaultKeyMappingStrategy()
+
+        if caching:
+            storage_strategy = CsvCachingStorageStrategy(key_strategy, filename_col_name)
+        else:
+            storage_strategy = CsvStorageStrategy(key_strategy, filename_col_name)
+
+        return GGBulkCollection(
             self,
             name,
-            layer,
-            rel_paths=rel_paths,
-            filename_col_name=filename_col_name,
-            caching=caching,
-            write_root=write_root,
+            resolver_strategy=LayerResolver(layer),
+            storage_strategy=storage_strategy,
+            bulk_files_root=bulk_files_root,
         )
 
 
@@ -646,7 +670,7 @@ class GGFile:
             extension: New suffix, including leading dot.
             target_set: Optional GGSet to resolve the output file in.
         """
-        target_dir = self.ggdir if target_set is None else GGDir._navigate_rel_path(target_set, self.ggdir.rel_path)
+        target_dir = self.ggdir if target_set is None else target_set.get_sub_dir(self.ggdir.rel_path)
         return target_dir.get_file(self.abs_path.with_suffix(extension).name)
 
     def get_corresponding_dir_in_same_dir(self, target_set: GGSet | None = None) -> GGDir:
@@ -655,7 +679,7 @@ class GGFile:
         Args:
             target_set: Optional GGSet to resolve the output directory in.
         """
-        target_dir = self.ggdir if target_set is None else GGDir._navigate_rel_path(target_set, self.ggdir.rel_path)
+        target_dir = self.ggdir if target_set is None else target_set.get_sub_dir(self.ggdir.rel_path)
         return target_dir.get_sub_dir(self.abs_path.with_suffix("").name)
 
     def read_image(self) -> Any:
@@ -762,561 +786,435 @@ class GGFile:
         return str(self.rel_path) + (" *" if not self.abs_path.exists() else "")
 
 
-class GGBulkBase(ABC):
-    """Abstract base class defining the bulk transaction operations across dataset groups."""
+class BulkFileResolver(ABC):
+    """Abstract base class for resolving bulk file instances."""
 
     @abstractmethod
-    def write(self, ref_file: GGFile, data: Any) -> None:
-        """Write row data mapped to a specific target reference file."""
+    def resolve(self, file: GGFile, bulk_collection: "GGBulkCollection") -> GGFile:
+        """Resolve and return a bulk file instance for a given GGDir."""
         pass
 
     @abstractmethod
-    def read_dataframe(self) -> pd.DataFrame:
-        """Read the bulk collection items and return them unified as a pandas DataFrame."""
+    def all_files(self, bulk_collection: "GGBulkCollection") -> List[GGFile]:
+        """Return a list of all GGFiles in the bulk collection."""
+        pass
+
+
+class LayerResolver(BulkFileResolver):
+    def __init__(self, layer: int):
+        self.layer = layer
+
+    def resolve(self, ref_file: GGFile, bulk_collection: "GGBulkCollection") -> GGFile:
+        d = ref_file.ggdir.ancestor_at_level(self.layer - 1).rel_path
+        target_dir = bulk_collection.bulk_files_root.get_sub_dir(d)
+        return target_dir.get_file(bulk_collection.file_name)
+
+    def all_files(self, bulk_collection: "GGBulkCollection") -> List[GGFile]:
+        files = []
+        for dir in bulk_collection.bulk_files_root.iterate_layer(self.layer - 1):
+            f = dir.get_file(bulk_collection.file_name)
+            if f.exists():
+                files.append(f)
+        return files
+
+
+class KeyMappingStrategy(ABC):
+    """Abstract base class for defining key mapping"""
+
+    @abstractmethod
+    def to_store_key(self, ref_file: GGFile, bulk_file: GGFile, bulk_collection: "GGBulkCollection") -> str:
+        """Return a unique key for a given reference file."""
         pass
 
     @abstractmethod
-    def read_dict(self) -> Dict[str, Any]:
-        """Read and aggregate all bulk dataset file content into a unified dictionary structure."""
+    def from_store_key(self, key: str, context_file: GGFile, bulk_collection: "GGBulkCollection") -> str:
+        """Return a GGFile corresponding to a given key."""
+        pass
+
+
+class DefaultKeyMappingStrategy(KeyMappingStrategy):
+    """Default key mapping strategy that uses the relative path of the reference file."""
+
+    def to_store_key(self, ref_file: GGFile, bulk_file: GGFile, bulk_collection: "GGBulkCollection") -> str:
+        return str(ref_file.rel_path)
+
+    def from_store_key(self, key: str, context_file: GGFile, bulk_collection: "GGBulkCollection") -> str:
+        return key
+
+
+class RelativePathKeyMappingStrategy(KeyMappingStrategy):
+    """Key mapping strategy that uses the relative path of the reference file from the context file's directory."""
+
+    def to_store_key(self, ref_file: GGFile, bulk_file: GGFile, bulk_collection: "GGBulkCollection") -> str:
+        return str(ref_file.rel_path.relative_to(bulk_file.ggdir.rel_path))
+
+    def from_store_key(self, key: str, bulk_file: GGFile, bulk_collection: "GGBulkCollection") -> str:
+        return (bulk_file.ggdir.rel_path / key).as_posix()
+
+
+class BulkStorageStrategy(ABC):
+    """Abstract base class for defining storage strategies for bulk collections."""
+
+    @abstractmethod
+    def write(self, ref_file: GGFile, bulk_file: GGFile, data: Any, bulk_collection: "GGBulkCollection") -> None:
+        """Write data for a given reference file."""
         pass
 
     @abstractmethod
-    def flush(self) -> None:
-        """Commit buffered internal memory records into permanent storage on disk."""
+    def read_dataframe(self, bulk_file: GGFile, bulk_collection: "GGBulkCollection") -> pd.DataFrame:
+        """Read data for a given bulk file and return it as a pandas DataFrame."""
         pass
 
     @abstractmethod
-    def read_for_file(self, ref_file: GGFile) -> Optional[Dict[str, Any]]:
-        """Look up and retrieve bulk structured data stored for a unique reference file."""
+    def read_dict(self, bulk_file: GGFile, bulk_collection: "GGBulkCollection") -> Dict[str, Any]:
+        """Read data for a given bulk file and return it as a dictionary."""
         pass
 
     @abstractmethod
-    def get_existing_files_set(self) -> set[str]:
-        """Collect all baseline reference files registered inside the storage document."""
+    def existing_files_set(self, bulk_file: GGFile, bulk_collection: "GGBulkCollection") -> set[str]:
+        """Return a set of existing reference file keys in the bulk file."""
         pass
-
-    def __enter__(self) -> Self:
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
-        self.flush()
 
     @abstractmethod
-    def iter(self) -> Iterator[Tuple[GGFile, Dict[str, Any]]]:
-        """Iterate over row content, returning pairs of active GGFiles and row dictionaries."""
+    def read_for_file(
+        self, ref_file: GGFile, bulk_file: GGFile, bulk_collection: "GGBulkCollection"
+    ) -> Optional[Dict[str, Any]]:
+        """Read data for a specific reference file from the corresponding bulk file."""
         pass
 
-    def __iter__(self) -> Iterator[Tuple[GGFile, Dict[str, Any]]]:
-        return self.iter()
+    @abstractmethod
+    def flush(self, bulk_collection: "GGBulkCollection") -> None:
+        """Flush any buffered data to the bulk file."""
+        pass
+
+    def iterate(
+        self, bulk_file: GGFile, bulk_collection: "GGBulkCollection"
+    ) -> Generator[Tuple[GGFile, Dict[str, Any]], None, None]:
+        """Iterate over all key-value pairs in the bulk file."""
+        data_dict = self.read_dict(bulk_file, bulk_collection)
+        for file_path, value in data_dict.items():
+            ref_file = bulk_collection.data_root.get_file(file_path)
+            if ref_file.exists():
+                yield ref_file, value
 
 
-T = TypeVar("T", bound="GGBulkSingleFileBase")
-
-
-class GGBulkCollectionBase(GGBulkBase, ABC, Generic[T]):
-    """Base class for bulk writers that manage multiple files across a GGSet."""
+class GGBulkCollection:
+    """Class representing a bulk collection of data across multiple files."""
 
     def __init__(
         self,
-        file_name: str,
-        layer: int,
         data_root: GGDir,
-        rel_paths: bool = False,
-        write_root: GGDir | None = None,
+        file_name: str,
+        resolver_strategy: BulkFileResolver,
+        storage_strategy: BulkStorageStrategy,
+        bulk_files_root: GGDir | None = None,
     ) -> None:
-        """Initialize the bulk context spanning a targeted hierarchy layer.
-
-        Args:
-            file_name: The target file name to be written under the target level directories.
-            layer: Integer index representing tree level context.
-            data_root: Root dataset folder wrapper.
-            rel_paths: Flag stating whether reference items use relative paths.
-            write_root: Mirroring directory root where storage outputs should take place.
-        """
-        if layer < 1:
-            raise ValueError("Layer must be >= 1.")
-        self.file_name = file_name
-        self.layer = layer
         self.data_root = data_root
-        self.write_root = write_root if write_root is not None else data_root
-        self.rel_paths = rel_paths
-        self.files: Dict[str, T] = {}
+        self.file_name = file_name
+        self.resolver_strategy = resolver_strategy
+        self.storage_strategy = storage_strategy
+        self.bulk_files_root = bulk_files_root if bulk_files_root is not None else data_root
 
-    def _get_corresponding_write_dir(self, source_dir: GGDir) -> GGDir:
-        """Return the directory in *write_root* that mirrors *source_dir* in *data_root*.
+    def write(self, ref_file: GGFile, data: Any) -> None:
+        """Write data for a given reference file."""
+        bulk_file = self.resolver_strategy.resolve(ref_file, self)
+        self.storage_strategy.write(ref_file, bulk_file, data, self)
 
-        When ``write_root`` and ``data_root`` are the same object, *source_dir*
-        is returned unchanged.  Otherwise the relative path of *source_dir* is
-        navigated from *write_root*.
-        """
-        if self.write_root is self.data_root:
-            return source_dir
-        return GGDir._navigate_rel_path(self.write_root, source_dir.rel_path)
+    def read_dataframe(self) -> pd.DataFrame:
+        """Read data for the entire bulk collection and return it as a pandas DataFrame."""
+        all_dataframes = []
+        for bulk_file in self.resolver_strategy.all_files(self):
+            df = self.storage_strategy.read_dataframe(bulk_file, self)
+            all_dataframes.append(df)
+        if len(all_dataframes) == 0:
+            return pd.DataFrame()
+        return pd.concat(all_dataframes, ignore_index=True)
 
-    def _iter_write_dirs(self) -> Generator[GGDir, None, None]:
-        """Yield write-root directories at the bulk layer.
+    def read_dict(self) -> Dict[str, Any]:
+        """Read data for the entire bulk collection and return it as a dictionary."""
+        all_data = {}
+        for bulk_file in self.resolver_strategy.all_files(self):
+            data = self.storage_strategy.read_dict(bulk_file, self)
+            all_data.update(data)
+        return all_data
 
-        When ``write_root`` equals ``data_root``, iterates ``write_root``
-        directly.  Otherwise derives write dirs by mapping each ``data_root``
-        dir through ``_get_corresponding_write_dir``, which keeps ``write_root``
-        in sync even when it was built before its subdirectories were created.
-        """
-        if self.write_root is self.data_root:
-            yield from self.write_root.iterate_layer(self.layer - 1)
-        else:
-            for dir in self.data_root.iterate_layer(self.layer - 1):
-                yield self._get_corresponding_write_dir(dir)
-
-    @abstractmethod
-    def _create_bulk_file(self, ggdir: GGDir) -> T:
-        """Create a new bulk file instance for a given GGDir."""
-        pass
-
-    def get_bulk_file(self, ggdir: GGDir) -> T:
-        """Return a bulk file wrapper for *ggdir*, creating it lazily if not yet cached.
-
-        The wrapper object is always returned regardless of whether the
-        underlying file exists on disk.  The physical file is only created
-        once data is actually written or flushed.
-        """
-        bulk_dir = ggdir.ancestor_at_level(self.layer - 1)
-        cache_key = str(bulk_dir.rel_path)
-        if cache_key not in self.files:
-            self.files[cache_key] = self._create_bulk_file(bulk_dir)
-        return self.files[cache_key]
+    def existing_files_set(self) -> set[str]:
+        """Return a set of existing reference file keys in the entire bulk collection."""
+        all_keys = set()
+        for bulk_file in self.resolver_strategy.all_files(self):
+            keys = self.storage_strategy.existing_files_set(bulk_file, self)
+            all_keys.update(keys)
+        return all_keys
 
     def read_for_file(self, ref_file: GGFile) -> Optional[Dict[str, Any]]:
         """Read data for a specific reference file from the corresponding bulk file."""
-        source_dir = ref_file.ggdir.ancestor_at_level(self.layer - 1)
-        write_dir = self._get_corresponding_write_dir(source_dir)
-        return self.get_bulk_file(write_dir).read_for_file(ref_file)
-
-    def read_dataframe(self) -> pd.DataFrame:
-        """Read and concatenate data from all bulk files into a single DataFrame."""
-        dfs = []
-        for dir in self._iter_write_dirs():
-            dfs.append(self.get_bulk_file(dir).read_dataframe())
-        non_empty = [df for df in dfs if not df.empty]
-        if non_empty:
-            return pd.concat(non_empty, ignore_index=True)
-        else:
-            return pd.DataFrame()
-
-    def read_dict(self) -> Dict[str, Any]:
-        """Read and merge data from all bulk files into a single dictionary."""
-        result = {}
-        for dir in self._iter_write_dirs():
-            result.update(self.get_bulk_file(dir).read_dict())
-        return result
-
-    def get_existing_files_set(self) -> Set[str]:
-        """Get a set of all existing reference file names across all bulk files."""
-        existing_files = set()
-        for dir in self._iter_write_dirs():
-            existing_files.update(self.get_bulk_file(dir).get_existing_files_set())
-        return existing_files
-
-    def get_existing_annotation_files_set(self) -> Set[T]:
-        """Get a set of all existing annotation files across all bulk files."""
-        return {self.get_bulk_file(dir) for dir in self._iter_write_dirs() if self.get_bulk_file(dir).exists()}
+        bulk_file = self.resolver_strategy.resolve(ref_file, self)
+        return self.storage_strategy.read_for_file(ref_file, bulk_file, self)
 
     def flush(self) -> None:
-        """Flush changes across all active nested file contexts to disk."""
-        for bulk_file in self.files.values():
-            bulk_file.flush()
+        """Flush any buffered data to the bulk files."""
+        self.storage_strategy.flush(self)
 
-    def write(self, ref_file: GGFile, data: Any) -> None:
-        """Write data for a specific reference file to the corresponding bulk file."""
-        source_dir = ref_file.ggdir.ancestor_at_level(self.layer - 1)
-        write_dir = self._get_corresponding_write_dir(source_dir)
-        self.get_bulk_file(write_dir).write(ref_file, data)
+    def __enter__(self) -> "GGBulkCollection":
+        return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
-        for bulk_file in self.files.values():
-            bulk_file.__exit__(exc_type, exc_val, exc_tb)
-        self.files.clear()
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        self.flush()
 
-    def iter(self) -> Iterator[Tuple[GGFile, Dict[str, Any]]]:
-        """Iterate over all bulk files managed by this collection."""
-        for dir in self._iter_write_dirs():
-            data = self.get_bulk_file(dir).read_dict()
-            for filename, row_data in data.items():
-                file = self.data_root.root.get_file(filename)
-                if file.exists():
-                    yield file, row_data
-                else:
-                    raise GGFileNotFoundError(f"File '{filename}' not found in GGSet.")
-            self.__exit__(None, None, None)
+    def iterate(self) -> Generator[Tuple[GGFile, Dict[str, Any]], None, None]:
+        """Iterate over all key-value pairs in the bulk collection."""
+        for bulk_file in self.resolver_strategy.all_files(self):
+            yield from self.storage_strategy.iterate(bulk_file, self)
+
+    def __iter__(self) -> Generator[Tuple[GGFile, Dict[str, Any]], None, None]:
+        return self.iterate()
 
 
-class GGBulkSingleFileBase(GGBulkBase, GGFile, ABC):
-    """Base class for bulk writers that manage a single file within a GGDir."""
+class JsonStorageStrategy(BulkStorageStrategy):
+    """Storage strategy for bulk collections using JSON files."""
 
-    def __init__(self, ggdir: GGDir, parent: GGBulkCollectionBase) -> None:
-        """Initialize single bulk tracking target link.
+    def __init__(self, key_resolver: KeyMappingStrategy):
+        self.key_resolver = key_resolver
+        self.buffer: Dict[str, Dict[str, Any]] = {}
 
-        Args:
-            ggdir: Parent directory node structure.
-            parent: Spanning aggregate collection tracking manager.
-        """
-        self.ggdir = ggdir
-        self.parent = parent
-        GGFile.__init__(self, ggdir, parent.file_name)
+    def _load(self, bulk_file: GGFile) -> Dict[str, Any]:
+        if not bulk_file.exists():
+            return {}
+        return bulk_file.read_json()
 
-    def _store_filename(self, ref_file: GGFile) -> str:
-        """Normalize key indexing string based on relative paths parameter configuration."""
-        if self.parent.rel_paths:
-            return str(ref_file.abs_path.relative_to(self.ggdir.abs_path))
-        return str(ref_file.rel_path)
+    def _get_buffer(self, bulk_file: GGFile) -> Dict[str, Any]:
+        key = str(bulk_file.rel_path)
+        if key not in self.buffer:
+            self.buffer[key] = self._load(bulk_file)
+        return self.buffer[key]
 
-    def _normalize_filename(self, filename: str) -> str:
-        """Format an stored record index key string back into standard form."""
-        if self.parent.rel_paths:
-            return str((self.ggdir.rel_path / Path(filename)).as_posix())
-        return filename
+    def read_for_file(
+        self, ref_file: GGFile, bulk_file: GGFile, bulk_collection: GGBulkCollection
+    ) -> Dict[str, Any] | None:
+        bulk_data = self._get_buffer(bulk_file)
+        if not bulk_data:
+            return None
+        store_key = self.key_resolver.to_store_key(ref_file, bulk_file, bulk_collection)
+        return bulk_data.get(store_key)
 
-    def iter(self) -> Iterator[Tuple[GGFile, Dict[str, Any]]]:
-        """Iterate over all rows in the bulk file, yielding reference files and their associated data."""
-        data = self.read_dict()
-        for filename, row_data in data.items():
-            file = self.parent.data_root.root.get_file(filename)
-            if file.exists():
-                yield file, row_data
-            else:
-                raise GGFileNotFoundError(f"File '{filename}' not found in GGSet.")
+    def write(self, ref_file: GGFile, bulk_file: GGFile, data: Any, bulk_collection: GGBulkCollection) -> None:
+        bulk_data = self._get_buffer(bulk_file)
+        store_key = self.key_resolver.to_store_key(ref_file, bulk_file, bulk_collection)
+        if store_key in bulk_data:
+            bulk_data[store_key].update(data)
+        else:
+            bulk_data[store_key] = data
+
+    def read_dict(self, bulk_file: GGFile, bulk_collection: GGBulkCollection) -> Dict[str, Any]:
+        d = self._get_buffer(bulk_file)
+        return {self.key_resolver.from_store_key(k, bulk_file, bulk_collection): v for k, v in d.items()}
+
+    def read_dataframe(self, bulk_file: GGFile, bulk_collection: GGBulkCollection) -> pd.DataFrame:
+        d = self.read_dict(bulk_file, bulk_collection)
+        l = [{"filename": k, **v} for k, v in d.items()]
+        return pd.DataFrame(l)
+
+    def existing_files_set(self, bulk_file: GGFile, bulk_collection: GGBulkCollection) -> set[str]:
+        bulk_data = self._get_buffer(bulk_file)
+        return set(bulk_data.keys())
+
+    def flush(self, bulk_collection: GGBulkCollection) -> None:
+        for bulk_file_key, data in self.buffer.items():
+            if len(data) > 0:
+                bulk_file = bulk_collection.bulk_files_root.get_file(bulk_file_key)
+                bulk_file.write_json(data)
+        self.buffer.clear()
 
 
-class GGBulkCsvFileCollection(GGBulkCollectionBase["GGBulkCsvSingleFile"]):
-    """A collection that manages group aggregation across directory layouts via individual CSV sheets."""
+class CsvBuffer:
+    """Buffer for CSV storage strategy to hold rows in memory before writing to disk."""
 
-    def __init__(
-        self,
-        root: GGDir,
-        file_name: str,
-        layer: int,
-        rel_paths: bool = False,
-        filename_col_name: str = "filename",
-        caching: bool = False,
-        write_root: GGSet | None = None,
-    ) -> None:
-        """Initialize the CSV collection supervisor tracking target layer tiers."""
-        if not file_name.endswith(".csv"):
-            file_name += ".csv"
-        super().__init__(file_name=file_name, layer=layer, data_root=root, rel_paths=rel_paths, write_root=write_root)
+    def __init__(self, file: GGFile, filename_col_name: str):
+        self.file = file
         self.filename_col_name = filename_col_name
-        self.caching = caching
+        self.rows: List[List[str]] = []
+        self.headers: List[str] | None = None
+        self.should_write_headers: bool = True
+        if self.file.exists():
+            with open(self.file.abs_path, "r") as f:
+                first_line = f.readline()
+                if first_line:
+                    self.headers = first_line.strip().split(",")
+                    if self.headers[0] != self.filename_col_name:
+                        raise ValueError(
+                            f"CSV file '{self.file.abs_path}' has a different first column name '{self.headers[0]}' than expected '{self.filename_col_name}'."
+                        )
+                    if len(self.headers) > 1:
+                        for line in f:
+                            self.rows.append(line.strip().split(","))
+                        self.should_write_headers = False
 
-    def _create_bulk_file(self, ggdir: GGDir) -> "GGBulkCsvSingleFile | GGBulkCachingCsvFileCollection":
-        """Instantiate tracking wrapper handler variants matching caching preferences."""
-        if self.caching:
-            return GGBulkCachingCsvFileCollection(ggdir, self)
-        else:
-            return GGBulkCsvSingleFile(ggdir, self)
+    def write(self, store_key: str, data: Dict[str, Any]) -> None:
+        if self.headers is None:
+            self.headers = [self.filename_col_name] + list(data.keys())
+        row = [store_key] + [str(data.get(h, "")) for h in self.headers[1:]]
+        self.rows.append(row)
+
+    def flush(self) -> None:
+        if len(self.rows) == 0:
+            return
+        if not self.file.exists():
+            self.file.touch()
+        with open(self.file.abs_path, "a") as f:
+            writer = csv.writer(f)
+            if self.should_write_headers:
+                if self.headers is None:
+                    raise ValueError("Headers are not set, cannot write to CSV.")
+                writer.writerow(self.headers)
+            for row in self.rows:
+                writer.writerow(row)
+        self.rows.clear()
+        self.should_write_headers = False
 
 
-class GGBulkCsvSingleFile(GGBulkSingleFileBase):
-    """A bulk CSV writer/reader that appends data lines tracking row values straight onto filesystem streams."""
+class CsvStorageStrategy(BulkStorageStrategy):
+    """Storage strategy for bulk collections using CSV files. This strategy does not hold a buffer in memory, and writes directly to disk."""
 
-    def __init__(self, ggdir: GGDir, parent: GGBulkCsvFileCollection) -> None:
-        """Initialize local file storage handler binding."""
-        super().__init__(ggdir, parent)
-        self.parent = parent
-        self.handler = None
-        self.cols = self._read_column_names()
+    def __init__(self, key_resolver: KeyMappingStrategy, filename_col_name: str = "filename"):
+        self.key_resolver = key_resolver
+        self.filename_col_name = filename_col_name
+        self.buffers: Dict[str, CsvBuffer] = {}
 
-    def _read_column_names(self) -> Optional[List[str]]:
-        """Parse headers from active file structure on disk if present."""
-        if self.abs_path.exists() and self.abs_path.is_file():
-            with self.abs_path.open() as f:
-                header = f.readline().strip().split(",")
-                if len(header) == 0 or header[0] == "":
-                    return None
-                if header[0] != self.parent.filename_col_name:
-                    raise ValueError(
-                        f"CSV file '{self.abs_path}' does not have '{self.parent.filename_col_name}' as the first column, cannot read columns."
-                    )
-                return header
-        return None
+    def _get_csv_buffer(self, bulk_file: GGFile) -> CsvBuffer:
+        key = str(bulk_file.rel_path)
+        if key not in self.buffers:
+            self.buffers[key] = CsvBuffer(bulk_file, self.filename_col_name)
+        return self.buffers[key]
 
-    def write(self, ref_file: GGFile, data: Any) -> None:
-        """Append a record line mapping reference data directly onto the end of the CSV sheet file."""
+    def write(self, ref_file: GGFile, bulk_file: GGFile, data: Any, bulk_collection: GGBulkCollection) -> None:
         if not isinstance(data, dict):
-            raise TypeError("Dynamic CSV bulk writers expect dictionary row data.")
-        filename = self._store_filename(ref_file)
-        if self.cols is None:
-            self.cols = [self.parent.filename_col_name] + list(data.keys())
-            self.touch()
-            with self.abs_path.open("w") as f:
-                f.write(",".join(self.cols) + "\n")
-        else:
-            new_cols = [col for col in data.keys() if col not in self.cols]
-            if new_cols:
-                raise ValueError(
-                    f"New columns {new_cols} are not in the existing CSV columns {self.cols}. Dynamic CSV does not support adding new columns after initialization."
-                )
-        row = [filename] + [str(data.get(col, "")) for col in self.cols[1:]]
-        if self.handler is None:
-            self.handler = self.abs_path.open("a")
-        self.handler.write(",".join(row) + "\n")
+            raise ValueError(f"Data must be a dictionary, got {type(data)}.")
+        buffer = self._get_csv_buffer(bulk_file)
+        store_key = self.key_resolver.to_store_key(ref_file, bulk_file, bulk_collection)
+        buffer.write(store_key, data)
 
-    def read_dataframe(self) -> pd.DataFrame:
-        """Read current document and return entries as structured DataFrame dataset."""
-        if not self.abs_path.exists():
-            return pd.DataFrame()
-        self.flush()
-        df = pd.read_csv(self.abs_path)
-        df[self.parent.filename_col_name] = df[self.parent.filename_col_name].apply(
-            lambda x: self._normalize_filename(x)
+    def read_dataframe(self, bulk_file: GGFile, bulk_collection: GGBulkCollection) -> pd.DataFrame:
+        if not bulk_file.exists():
+            return pd.DataFrame(columns=[self.filename_col_name])
+        df = pd.read_csv(bulk_file.abs_path)
+        df[self.filename_col_name] = df[self.filename_col_name].map(
+            lambda x: self.key_resolver.from_store_key(str(x), bulk_file, bulk_collection)
         )
         return df
 
-    def read_dict(self) -> Dict[str, Any]:
-        """Convert flat tabular file dataset layout back to row dictionaries."""
-        df = self.read_dataframe()
-        result = {}
-        for _, row in df.iterrows():
-            filename = row[self.parent.filename_col_name]
-            result[filename] = row.drop(labels=[self.parent.filename_col_name]).to_dict()
-        return result
+    def read_dict(self, bulk_file: GGFile, bulk_collection: GGBulkCollection) -> Dict[str, Any]:
+        df = self.read_dataframe(bulk_file, bulk_collection)
+        return df.set_index(self.filename_col_name).to_dict(orient="index")  # type: ignore
 
-    def flush(self) -> None:
-        """Flush the active text storage buffers onto the file system."""
-        if self.handler is not None:
-            self.handler.flush()
-
-    def read_for_file(self, ref_file: GGFile) -> Optional[Dict[str, Any]]:
-        """Look up reference match keys line-by-line directly across row data."""
-        if not self.abs_path.exists():
-            return None
-        if not ref_file.abs_path.is_relative_to(self.ggdir.abs_path):
-            raise GGFileNotFoundError(f"File '{ref_file.rel_path}' is not in bulk branch '{self.ggdir.rel_path}'.")
-        self.flush()
-        filename = self._store_filename(ref_file)
-        with self.abs_path.open() as f:
-            header = f.readline().strip().split(",")
-            if len(header) == 0:
-                return None
-            if header[0] != self.parent.filename_col_name:
-                raise ValueError(
-                    f"CSV file '{self.abs_path}' does not have '{self.parent.filename_col_name}' as the first column, cannot use lookup."
-                )
-            for line in f:
-                row = line.strip().split(",")
-                if row[0] == filename:
-                    return {col: value for col, value in zip(header[1:], row[1:])}
-        return None
-
-    def get_existing_files_set(self) -> set[str]:
-        """Scan file key indexes directly from first value items column."""
-        if not self.abs_path.exists():
-            return set()
-        self.flush()
+    def existing_files_set(self, bulk_file: GGFile, bulk_collection: GGBulkCollection) -> set[str]:
         existing_files = set()
-        with self.abs_path.open() as f:
-            header = f.readline().strip().split(",")
-            if len(header) == 0:
-                return existing_files
-            if header[0] != self.parent.filename_col_name:
-                raise ValueError(
-                    f"CSV file '{self.abs_path}' does not have '{self.parent.filename_col_name}' as the first column, cannot determine existing files set."
-                )
-            for line in f:
-                row = line.strip().split(",")
-                existing_files.add(self._normalize_filename(row[0]))
+        if bulk_file.exists():
+            with open(bulk_file.abs_path, "r") as f:
+                first_line = f.readline()
+                if first_line:
+                    headers = first_line.strip().split(",")
+                    if headers[0] != self.filename_col_name:
+                        raise ValueError(
+                            f"CSV file '{bulk_file.abs_path}' has a different first column name '{headers[0]}' than expected '{self.filename_col_name}'."
+                        )
+                    for line in f:
+                        key = line.strip().split(",")[0].strip()
+                        existing_files.add(self.key_resolver.from_store_key(key, bulk_file, bulk_collection))
         return existing_files
 
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        if self.handler is not None:
-            self.handler.flush()
-            self.handler.close()
-            self.handler = None
-
-
-class GGBulkCachingCsvFileCollection(GGBulkSingleFileBase):
-    """An optimized variant of the bulk CSV tracking node that uses an in-memory DataFrame cache before flushing data."""
-
-    def __init__(self, ggdir: GGDir, parent: GGBulkCsvFileCollection) -> None:
-        """Initialize the caching CSV tracking wrapper node."""
-        super().__init__(ggdir, parent)
-        self.parent = parent
-        self.df = None
-
-    def _get_df(self) -> pd.DataFrame | None:
-        """Safely fetch or populate target DataFrame instance data from file disk."""
-        if self.df is None:
-            if self.abs_path.exists():
-                if not self.abs_path.is_file():
-                    raise ValueError(f"Expected a file at '{self.abs_path}', but found a directory.")
-                df = pd.read_csv(self.abs_path)
-                if not df.empty:
-                    self.df = df
-        return self.df
-
-    def write(self, ref_file: GGFile, data: Any) -> None:
-        """Cache tracking values into memory matrix space, overriding existing match elements."""
-        if not isinstance(data, dict):
-            raise TypeError("Dynamic CSV bulk writers expect dictionary row data.")
-        filename = self._store_filename(ref_file)
-        df = self._get_df()
-        if df is None:
-            df = pd.DataFrame(columns=[self.parent.filename_col_name] + list(data.keys()))
-        if filename in df[self.parent.filename_col_name].values:
-            df.loc[df[self.parent.filename_col_name] == filename, list(data.keys())] = pd.Series(data)
-        else:
-            new_row = {self.parent.filename_col_name: filename}
-            new_row.update(data)
-            self.df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
-
-    def read_dataframe(self) -> pd.DataFrame:
-        """Return the managed cache contents structured as a pandas DataFrame."""
-        df = self._get_df()
-        if df is None:
-            return pd.DataFrame(columns=[self.parent.filename_col_name])
-        df = df.copy()
-        df[self.parent.filename_col_name] = df[self.parent.filename_col_name].apply(
-            lambda x: self._normalize_filename(x)
-        )
-        return df
-
-    def read_dict(self) -> Dict[str, Any]:
-        """Convert table data segments into mapped dataset dictionaries."""
-        df = self.read_dataframe()
-        result = {}
-        for _, row in df.iterrows():
-            filename = row[self.parent.filename_col_name]
-            result[filename] = row.drop(labels=[self.parent.filename_col_name]).to_dict()
-        return result
-
-    def flush(self) -> None:
-        """Serialize data matrices down out to file disk records."""
-        if self.df is not None:
-            self.touch()
-            self.df.to_csv(self.abs_path, index=False)
-
-    def read_for_file(self, ref_file: GGFile) -> Optional[Dict[str, Any]]:
-        """Look up reference file rows inside the memory matrix scope."""
-        df = self._get_df()
-        if df is None:
+    def read_for_file(
+        self, ref_file: GGFile, bulk_file: GGFile, bulk_collection: GGBulkCollection
+    ) -> Optional[Dict[str, Any]]:
+        if not bulk_file.exists():
             return None
-        filename = self._store_filename(ref_file)
-        row = df[df[self.parent.filename_col_name] == filename]
-        if not row.empty:
-            return row.iloc[0].drop(labels=[self.parent.filename_col_name]).to_dict()  # type: ignore
+        store_key = self.key_resolver.to_store_key(ref_file, bulk_file, bulk_collection)
+        with open(bulk_file.abs_path, "r") as f:
+            first_line = f.readline()
+            if not first_line:
+                return None
+            headers = first_line.strip().split(",")
+            if headers[0] != self.filename_col_name:
+                raise ValueError(
+                    f"CSV file '{bulk_file.abs_path}' has a different first column name '{headers[0]}' than expected '{self.filename_col_name}'."
+                )
+            for line in f:
+                row = line.strip().split(",")
+                if row[0].strip() == store_key:
+                    return {headers[i]: row[i] for i in range(1, len(headers))}
         return None
 
-    def get_existing_files_set(self) -> set[str]:
-        """Collect tracking keys listed under index column layout metrics."""
-        df = self._get_df()
-        if df is None:
-            return set()
-        return {self._normalize_filename(filename) for filename in df[self.parent.filename_col_name].tolist()}
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.flush()
+    def flush(self, bulk_collection: GGBulkCollection) -> None:
+        for buffer in self.buffers.values():
+            buffer.flush()
+        self.buffers.clear()
 
 
-class GGBulkJsonFileCollection(GGBulkCollectionBase["GGBulkJsonSingleFile"]):
-    """A collection that manages group aggregation across directory layouts via individual JSON object maps."""
+class CsvCachingStorageStrategy(CsvStorageStrategy):
+    """Storage strategy for bulk collections using CSV files with caching enabled. This strategy holds a buffer in memory, and writes to disk only when flushed."""
 
-    def __init__(
-        self, root: GGDir, file_name: str, layer: int, rel_paths: bool = False, write_root: GGSet | None = None
-    ) -> None:
-        """Initialize the collection tracking manager across specified layers."""
-        if not file_name.endswith(".json"):
-            file_name += ".json"
-        super().__init__(file_name=file_name, layer=layer, data_root=root, rel_paths=rel_paths, write_root=write_root)
+    def __init__(self, key_resolver: KeyMappingStrategy, filename_col_name: str = "filename"):
+        super().__init__(key_resolver, filename_col_name)
+        self.dfs: Dict[str, pd.DataFrame] = {}
 
-    def _create_bulk_file(self, ggdir: GGDir) -> "GGBulkJsonSingleFile":
-        """Instantiate single tracking context sheets tracking metadata segments."""
-        return GGBulkJsonSingleFile(ggdir, self)
-
-
-class GGBulkJsonSingleFile(GGBulkSingleFileBase):
-    """A bulk JSON writer/reader that maps key indices directly to nested record fields."""
-
-    def __init__(self, ggdir: GGDir, parent: GGBulkJsonFileCollection):
-        """Initialize local file storage handler binding."""
-        super().__init__(ggdir, parent)
-        self.parent = parent
-        self.data = self._read_json_file()
-
-    def _read_json_file(self) -> Dict[str, Dict[str, Any]]:
-        """Read document entries off disk storage structures."""
-        if self.exists():
-            loaded = self.read_json()
-            if not isinstance(loaded, dict):
-                raise ValueError(f"Existing JSON file '{self.abs_path}' must contain a dictionary at the root.")
-            data = {}
-            for key, value in loaded.items():
-                if not isinstance(key, str) or not isinstance(value, dict):
-                    raise ValueError(f"Existing JSON file '{self.abs_path}' must map filename keys to object rows.")
-                data[key] = value
-        else:
-            data = {}
-
-        return data
-
-    def _update_data(self) -> None:
-        """Merge memory tracking record dictionaries cleanly with file disk logs."""
-        disk_state = self._read_json_file()
-        for filename, row_data in self.data.items():
-            if filename in disk_state:
-                disk_state[filename].update(row_data)
+    def _get_dataframe(self, bulk_file: GGFile, bulk_collection: GGBulkCollection) -> pd.DataFrame:
+        key = str(bulk_file.rel_path)
+        if key not in self.dfs:
+            if bulk_file.exists():
+                self.dfs[key] = pd.read_csv(bulk_file.abs_path)
             else:
-                disk_state[filename] = row_data
-        self.data = disk_state
+                self.dfs[key] = pd.DataFrame(columns=[self.filename_col_name])
+        return self.dfs[key]
 
-    def write(self, ref_file: GGFile, data: Any) -> None:
-        """Stage or update dataset records for a unique target reference file key."""
+    def write(self, ref_file: GGFile, bulk_file: GGFile, data: Any, bulk_collection: GGBulkCollection) -> None:
         if not isinstance(data, dict):
-            raise TypeError("JSON bulk writers expect a dictionary containing row data.")
-        filename = self._store_filename(ref_file)
-        if filename in self.data:
-            self.data[filename].update(data)
+            raise ValueError(f"Data must be a dictionary, got {type(data)}.")
+        df = self._get_dataframe(bulk_file, bulk_collection)
+        store_key = self.key_resolver.to_store_key(ref_file, bulk_file, bulk_collection)
+        new_row = {self.filename_col_name: store_key, **data}
+        if store_key in df[self.filename_col_name].values:
+            # df.loc[df[self.filename_col_name] == store_key, list(data.keys())] = list(data.values())
+            filt = df[self.filename_col_name] == store_key
+            for key, value in data.items():
+                df.loc[filt, key] = value
         else:
-            self.data[filename] = data
+            df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
+        self.dfs[str(bulk_file.rel_path)] = df
 
-    def read_dataframe(self) -> pd.DataFrame:
-        """Read file map entries and return structural dataset contents as a flat DataFrame."""
-        self._update_data()
-        rows = []
-        for filename, row_data in self.data.items():
-            row = {"filename": self._normalize_filename(filename)}
-            row.update(row_data)
-            rows.append(row)
-        return pd.DataFrame(rows)
+    def flush(self, bulk_collection: GGBulkCollection) -> None:
+        for key, df in self.dfs.items():
+            if not df.empty:
+                bulk_file = bulk_collection.bulk_files_root.get_file(key)
+                bulk_file.touch()
+                df.to_csv(bulk_file.abs_path, index=False)
+        self.dfs.clear()
 
-    def read_dict(self) -> Dict[str, Any]:
-        """Return file mapping logs as structured dictionary metrics."""
-        self._update_data()
-        result = {}
-        for filename, row_data in self.data.items():
-            normalized_filename = self._normalize_filename(filename)
-            result[normalized_filename] = row_data
-        return result
+    def read_dataframe(self, bulk_file: GGFile, bulk_collection: GGBulkCollection) -> pd.DataFrame:
+        r = self._get_dataframe(bulk_file, bulk_collection).copy()
+        r[self.filename_col_name] = r[self.filename_col_name].map(
+            lambda x: self.key_resolver.from_store_key(str(x), bulk_file, bulk_collection)
+        )
+        return r
 
-    def flush(self) -> None:
-        """Serialize data logs into formatting layout maps out on disk streams."""
-        if len(self.data) == 0:
-            return
-        self._update_data()
-        self.write_json(self.data)
+    def read_dict(self, bulk_file: GGFile, bulk_collection: GGBulkCollection) -> Dict[str, Any]:
+        df = self.read_dataframe(bulk_file, bulk_collection)
+        return df.set_index(self.filename_col_name).to_dict(orient="index")  # type: ignore
 
-    def read_for_file(self, ref_file: GGFile) -> Optional[Dict[str, Any]]:
-        """Retrieve stored structural value maps matching reference key flags."""
-        self._update_data()
-        filename = self._store_filename(ref_file)
-        if filename in self.data:
-            return self.data[filename]
-        return None
+    def read_for_file(
+        self, ref_file: GGFile, bulk_file: GGFile, bulk_collection: GGBulkCollection
+    ) -> Dict[str, Any] | None:
+        df = self._get_dataframe(bulk_file, bulk_collection)
+        store_key = self.key_resolver.to_store_key(ref_file, bulk_file, bulk_collection)
+        row = df[df[self.filename_col_name] == store_key]
+        if row.empty:
+            return None
+        d = row.iloc[0].to_dict()
+        d.pop(self.filename_col_name, None)
+        return d  # type: ignore
 
-    def get_existing_files_set(self) -> set[str]:
-        """Collect tracking keys listed across mapping layers."""
-        self._update_data()
-        return {self._normalize_filename(filename) for filename in self.data.keys()}
+    def existing_files_set(self, bulk_file: GGFile, bulk_collection: GGBulkCollection) -> set[str]:
+        df = self._get_dataframe(bulk_file, bulk_collection)
+        return set(
+            df[self.filename_col_name].map(
+                lambda x: self.key_resolver.from_store_key(str(x), bulk_file, bulk_collection)
+            )
+        )

@@ -8,10 +8,8 @@ __all__ = [
     "GGNotFoundError",
     "GGDirNotFoundError",
     "GGFileNotFoundError",
-    "GGBulkBase",
-    "GGBulkJsonFileCollection",
-    "GGBulkCsvFileCollection",
+    "GGBulkCollection",
 ]
-__version__ = "0.5.3"
+__version__ = "0.6.0"
 
 from .ggset import *
