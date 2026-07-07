@@ -94,7 +94,7 @@ class GGDir:
             self, GGSet
         ), "Only the root node can have level 0, and it must be an instance of GGSet."
         input_path = Path(path)
-        self.parent = parent
+        self.parent: GGDir = parent  # type: ignore
         self._sub_dirs: Optional[List[GGDir]] = None
         self.data_type_level = data_type_level
         self.level = level
@@ -349,10 +349,10 @@ class GGDir:
         """
         data_level = self.data_type_level_parent
         target_data_level = target_set.get_sub_dir(data_level.rel_path) if target_set is not None else data_level
-        rel_path = self.abs_path.relative_to(data_level.abs_path)
+        rel_path = self.rel_path.relative_to(data_level.rel_path)
         final_GGDir = target_data_level.get_sub_dir(data_type)
 
-        for part in rel_path.parts[1:]:
+        for part in rel_path.parts[1:-1]:
             final_GGDir = final_GGDir.get_sub_dir(part)
 
         filename = rel_path.parts[-1] + extension

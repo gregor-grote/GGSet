@@ -295,13 +295,14 @@ class TestGGDir(unittest.TestCase):
         small_ggset_root = Path(self._tmpdir.name) / "small_GGDir_get_file_for_dir"
         _write(small_ggset_root / "data" / "db1" / "file1.txt", "1")
         ggset = GGSet(small_ggset_root, data_type_level=1)
-        data_dir = ggset.get_sub_dir("data")
-        file_for_dir = data_dir.get_corresponding_file_for_this_dir("labels", ".txt")
+        data_dir = ggset.get_sub_dir("data/")
+        file_for_dir = data_dir.get_sub_dir("db1").get_corresponding_file_for_this_dir("labels", ".txt")
+        print(f"File for dir: {file_for_dir.abs_path}")
         self.assertFalse(file_for_dir.exists())
-        self.assertEqual(file_for_dir.rel_path.name, "data.txt")
+        self.assertEqual(file_for_dir.rel_path.name, "db1.txt")
         self.assertEqual(file_for_dir.rel_path.parent.name, "labels")
         file_for_dir.write_text("annotation for data dir")
-        annotation_file = ggset.get_sub_dir("labels").get_file("data.txt")
+        annotation_file = ggset.get_sub_dir("labels").get_file("db1.txt")
         self.assertTrue(annotation_file.exists(), "Annotation file for data dir was not created.")
         self.assertEqual(annotation_file.read_text(), "annotation for data dir")
 
@@ -532,21 +533,21 @@ class TestGGDir(unittest.TestCase):
         target_root = Path(self._tmpdir.name) / "tgt_file_for_dir"
         source_root_resolved = source_root.resolve()
         target_root_resolved = target_root.resolve()
-        _write(source_root / "data" / "file1.txt", "1")
+        _write(source_root / "data" / "db1" / "file1.txt", "1")
         source = GGSet(source_root, data_type_level=1)
         target = GGSet(target_root, data_type_level=1)
 
         data_dir = source.get_sub_dir("data")
-        result = data_dir.get_corresponding_file_for_this_dir("labels", ".txt", target_set=target)
+        result = data_dir.get_sub_dir("db1").get_corresponding_file_for_this_dir("labels", ".txt", target_set=target)
 
         self.assertTrue(result.abs_path.is_relative_to(target_root_resolved))
         self.assertFalse(result.abs_path.is_relative_to(source_root_resolved))
-        self.assertEqual(result.rel_path, Path("labels") / "data.txt")
+        self.assertEqual(result.rel_path, Path("labels") / "db1.txt")
         self.assertFalse(result.exists())
 
         result.write_text("dir annotation")
         self.assertTrue(result.exists())
-        self.assertFalse((source_root_resolved / "labels" / "data.txt").exists())
+        self.assertFalse((source_root_resolved / "labels" / "db1.txt").exists())
 
     def test_get_corresponding_file_in_target_set_nested(self):
         """target_set works correctly with data_type_level > 1 (nested branches)."""
