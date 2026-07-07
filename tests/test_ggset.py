@@ -653,7 +653,7 @@ class TestGGDir(unittest.TestCase):
             self.assertIsNone(bulk.read_for_file(data_file))
             self.assertTrue(bulk.read_dataframe().empty)
             self.assertEqual(bulk.read_dict(), {})
-            self.assertEqual(bulk.existing_files_set(), set())
+            self.assertEqual(bulk.get_existing_files_set(), set())
 
         # No rows were written, so the file must still not exist.
         self.assertFalse(ggset.get_file("train/bulk_data.csv").exists())
@@ -680,7 +680,7 @@ class TestGGDir(unittest.TestCase):
             self.assertIsNone(bulk.read_for_file(data_file))
             self.assertTrue(bulk.read_dataframe().empty)
             self.assertEqual(bulk.read_dict(), {})
-            self.assertEqual(bulk.existing_files_set(), set())
+            self.assertEqual(bulk.get_existing_files_set(), set())
 
         # No rows written → file must not exist
         self.assertFalse(ggset.get_file("train/bulk_data.csv").exists())
@@ -707,7 +707,7 @@ class TestGGDir(unittest.TestCase):
             data_file = ggset.get_file("train/data/file1.txt")
             self.assertIsNone(bulk.read_for_file(data_file))
             self.assertEqual(bulk.read_dict(), {})
-            self.assertEqual(bulk.existing_files_set(), set())
+            self.assertEqual(bulk.get_existing_files_set(), set())
 
         # No rows were written, so the file must still not exist.
         self.assertFalse(ggset.get_file("train/bulk_data.json").exists())

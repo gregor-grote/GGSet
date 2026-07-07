@@ -871,7 +871,7 @@ class BulkStorageStrategy(ABC):
         pass
 
     @abstractmethod
-    def existing_files_set(self, bulk_file: GGFile, bulk_collection: "GGBulkCollection") -> set[str]:
+    def get_existing_files_set(self, bulk_file: GGFile, bulk_collection: "GGBulkCollection") -> set[str]:
         """Return a set of existing reference file keys in the bulk file."""
         pass
 
@@ -938,11 +938,11 @@ class GGBulkCollection:
             all_data.update(data)
         return all_data
 
-    def existing_files_set(self) -> set[str]:
+    def get_existing_files_set(self) -> set[str]:
         """Return a set of existing reference file keys in the entire bulk collection."""
         all_keys = set()
         for bulk_file in self.resolver_strategy.all_files(self):
-            keys = self.storage_strategy.existing_files_set(bulk_file, self)
+            keys = self.storage_strategy.get_existing_files_set(bulk_file, self)
             all_keys.update(keys)
         return all_keys
 
@@ -1014,9 +1014,9 @@ class JsonStorageStrategy(BulkStorageStrategy):
         l = [{"filename": k, **v} for k, v in d.items()]
         return pd.DataFrame(l)
 
-    def existing_files_set(self, bulk_file: GGFile, bulk_collection: GGBulkCollection) -> set[str]:
+    def get_existing_files_set(self, bulk_file: GGFile, bulk_collection: GGBulkCollection) -> set[str]:
         bulk_data = self._get_buffer(bulk_file)
-        return set(bulk_data.keys())
+        return set(self.key_resolver.from_store_key(k, bulk_file, bulk_collection) for k in bulk_data.keys())
 
     def flush(self, bulk_collection: GGBulkCollection) -> None:
         for bulk_file_key, data in self.buffer.items():
@@ -1106,7 +1106,7 @@ class CsvStorageStrategy(BulkStorageStrategy):
         df = self.read_dataframe(bulk_file, bulk_collection)
         return df.set_index(self.filename_col_name).to_dict(orient="index")  # type: ignore
 
-    def existing_files_set(self, bulk_file: GGFile, bulk_collection: GGBulkCollection) -> set[str]:
+    def get_existing_files_set(self, bulk_file: GGFile, bulk_collection: GGBulkCollection) -> set[str]:
         existing_files = set()
         if bulk_file.exists():
             with open(bulk_file.abs_path, "r") as f:
@@ -1211,7 +1211,7 @@ class CsvCachingStorageStrategy(CsvStorageStrategy):
         d.pop(self.filename_col_name, None)
         return d  # type: ignore
 
-    def existing_files_set(self, bulk_file: GGFile, bulk_collection: GGBulkCollection) -> set[str]:
+    def get_existing_files_set(self, bulk_file: GGFile, bulk_collection: GGBulkCollection) -> set[str]:
         df = self._get_dataframe(bulk_file, bulk_collection)
         return set(
             df[self.filename_col_name].map(
