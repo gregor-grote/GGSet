@@ -97,6 +97,18 @@ for label_file in label_dir.get_sub_files():
 GGSet supports reading and writing metadata stored in shared files (for example one CSV per folder).
 
 ### CSV Collections
+```text
+train/
+	annotations.csv
+	images/
+		sample1.png
+		sample2.png
+test/
+	annotations.csv
+	images/
+		sample3.png
+```
+
 
 ```python
 with ggset.create_bulk_csv_collection(
@@ -120,13 +132,26 @@ Key behavior:
 
 Options:
 
-* `rel_paths`: store paths relative to the CSV location
+* `layer`: the directory level where the CSV files are located (1 = below root, below each subdirectory below root, etc.)
+* `rel_paths`: store paths relative to the CSV location (`True`) or to the dataset root (`False`)
 * `caching=True`: keeps data in memory and overwrites existing rows
-* `caching=False`: appends rows (duplicates possible)
+* `caching=False`: appends rows (duplicates possible, but faster for large datasets)
 
 ---
 
 ### JSON Collections
+
+```text
+train/
+	annotations.json
+	images/
+		sample1.png
+		sample2.png
+test/
+	annotations.json
+	images/
+		sample3.png
+```
 
 ```python
 collection = ggset.create_bulk_json_collection(
@@ -146,6 +171,11 @@ JSON collections store data as:
   "path/to/file": { ... }
 }
 ```
+
+Options:
+
+* `layer`: the directory level where the JSON files are located (1 = below root, below each subdirectory below root, etc.)
+* `rel_paths`: store paths relative to the JSON location (`True`) or to the dataset root (`False`)
 
 ---
 
@@ -238,13 +268,15 @@ ggset.add_filter_exclude(level=2, "tmp")
 
 Filters apply per directory level.
 
+Note, that when creating a custom `GetSubDirsStrategy`, the filters are not applied anymore. See [example-usage.ipynb](example-usage.ipynb) for more details.
+
 ---
 
 ## Notes
 
 * Paths are resolved lazily; the directory tree is not built upfront
-* Non-existing files are represented and can be written later
-* Bulk collections can target a different output dataset via `bulk_files_root`
+* Non-existing files and their parent directories are only created when writing or explicitly when calling `touch()`
+* Bulk collections can target a different output dataset via `bulk_files_root`, so you can save the annotations to a different location than the data files.
 * This library is designed to be flexible and lightweight, without enforcing a specific dataset structure by relying extensively on the Strategy pattern. (See [example-usage.ipynb](example-usage.ipynb) for more details.)
 
 ---
