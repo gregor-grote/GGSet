@@ -5,6 +5,11 @@ __all__ = [
     "GGDir",
     "GGFile",
     "GGSet",
+    "GetSubDirsStrategy",
+    "DefaultSubdirsStrategy",
+    "FilteredSubdirsStrategy",
+    "GetSubFilesStrategy",
+    "DefaultSubfilesStrategy",
     "GGNotFoundError",
     "GGDirNotFoundError",
     "GGFileNotFoundError",
@@ -19,6 +24,6 @@ __all__ = [
     "CsvStorageStrategy",
     "CsvCachingStorageStrategy",
 ]
-__version__ = "0.7.0"
+__version__ = "0.8.0"
 
 from .ggset import *

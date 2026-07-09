@@ -1,175 +1,261 @@
 # GGSet
 
-A lightweight library for working with structured datasets where data and labels are stored across flexible directory layouts.
+GGSet is a small utility library for working with datasets stored in directory structures. It provides a consistent way to navigate files, map related data across folders, and manage metadata stored in JSON or CSV files.
 
-## Core Idea
+The goal is to remove boilerplate when dealing with datasets that are not strictly flat or standardized.
 
-`GGSet` provides a unified interface to iterate over files and access corresponding metadata (labels) — regardless of how the dataset is organized on disk.
-
-It is especially useful for:
-
-* Image datasets with separate or distributed annotations
-* Machine learning pipelines with custom folder structures
-* Datasets with CSV or JSON metadata files
+---
 
 ## Installation
 
 ```bash
-pip install git+https://github.com/gregor-grote/GGSet.git
+pip install -U git+https://github.com/gregor-grote/GGSet.git
 ```
 
 ---
 
-## Main Features
-
-### 1. Branched Dataset Support (Core Feature)
-
-Work with datasets where data and labels live in different directory branches.
-
-```text
-dataset/
-	train/
-		images/
-			sample1.png
-		labels/
-			sample1.json
-	test/
-		images/
-			sample2.png
-		labels/
-			sample2.json
-```
-
-* Configure via `data_type_level`
-* Access corresponding files across branches
-
-```python
-ggset = GGSet(path, data_type_level=2)
-
-for file in ggset.iterate(data_type="images"):
-    label_file = file.get_corresponding_file(data_type="labels", extension=".json")
-    label_data = label_file.read_json()
-```
-
-Supports:
-
-* Reading corresponding label files
-* Writing new labels into parallel branches
-* Automatic path resolution between branches
-
----
-
-### 2. CSV Metadata Collections
-
-```text
-dataset/
-	train/
-    annotations.csv
-		sample1.png
-		sample2.png
-	test/
-    annotations.csv
-		sample3.png
-    sample4.png
-		
-```
-
-Read and write labels stored in CSV files across the dataset.
-
-```python
-with ggset.create_bulk_csv_collection("annotations.csv", layer=2, rel_paths=True, caching=True) as labels:
-    for file, label in labels:
-        ...
-```
-
-Features:
-
-* Iterate `(file, label)` pairs
-* Load full dataset as a pandas DataFrame
-* Write new metadata entries
-* Choose if relative paths (from the csv file) or absolute paths (from the dataset root) are written in the CSV file (When iterating, the paths are always resolved)
-* Choose if the CSV file is cached in memory for faster access, or not for lower memory usage (because it is just appended when writing new entries)
-* Use `.create_bulk_json_collection()` for JSON metadata files instead of CSV
-
----
-
-### 3. Corresponding File Handling
-
-Easily resolve related files based on dataset structure:
-
-* Across branches:
-
-```python
-file.get_corresponding_file(data_type="labels", extension=".json")
-```
-
-* In the same directory:
-
-```python
-file.get_corresponding_file_in_same_dir(".json")
-```
-
-Supports:
-
-* Reading / writing labels
-* Placeholder wrappers for unresolved paths (`.exists()` to check on-disk presence)
-
----
-
-### 4. Corresponding Directory Handling
-
-Work with label directories instead of single files.
-
-* Same directory:
-
-```python
-file.get_corresponding_dir_in_same_dir()
-```
-
-* Different branch:
-
-```python
-file.get_corresponding_dir("labels")
-```
-
-Features:
-
-* Iterate over label files per sample
-* Create new label directories dynamically
-* Auto-generate files inside label folders
-
----
-
-## Supported Dataset Layouts
-
-GGSet works with multiple dataset structures:
-
-* **Branched datasets** (data and labels separated)
-* **Flat datasets with CSV/JSON metadata**
-* **Same-directory labels** (image + annotation file)
-* **Per-sample label directories**
-* **Label directories in separate branches**
-
----
-
-## Minimal Example
+## Basic Usage
 
 ```python
 from ggset import GGSet
 
-ggset = GGSet("dataset_path")
+ggset = GGSet("path/to/dataset")
 
 for file in ggset.iterate(filter_endings=(".png",)):
-    img = file.read_image()
+    image = file.read_image()
 ```
+
+`GGSet` represents the root of your dataset. From there, you can iterate through files, access directories, and resolve related files.
+
+---
+
+## Working with Structured Datasets
+
+### Separate Data Branches
+
+If your dataset separates data into branches (for example `images/` and `labels/`), you can configure this using `data_type_level`.
+
+```text
+dataset/
+    train/
+        images/
+            sample1.png
+        labels/
+            sample1.json
+```
+
+```python
+ggset = GGSet("dataset", data_type_level=2)
+
+for img_file in ggset.iterate(data_type="images"):
+    label_file = img_file.get_corresponding_file(
+        data_type="labels",
+        extension=".json"
+    )
+    label_data = label_file.read_json()
+```
+
+The relative structure is preserved when resolving corresponding files.
+
+---
+
+### Same-Directory Files
+
+If files live next to each other:
+
+```text
+sample1.png
+sample1.json
+```
+
+```python
+label_file = file.get_corresponding_file_in_same_dir(".json")
+```
+
+---
+
+### Per-Sample Directories
+
+```text
+sample1.png
+sample1/
+    label1.json
+    label2.json
+```
+
+```python
+label_dir = file.get_corresponding_dir_in_same_dir()
+
+for label_file in label_dir.get_sub_files():
+    data = label_file.read_json()
+```
+
+---
+
+## Bulk Metadata (CSV / JSON)
+
+GGSet supports reading and writing metadata stored in shared files (for example one CSV per folder).
+
+### CSV Collections
+
+```python
+with ggset.create_bulk_csv_collection(
+    "annotations.csv",
+    layer=2,
+    rel_paths=True,
+    caching=True
+) as collection:
+
+    for file, row in collection:
+        ...
+
+    collection.write(file, {"label": 1})
+```
+
+Key behavior:
+
+* Iteration yields `(file, data_dict)`
+* Files are resolved automatically
+* Writes are buffered and flushed on exit
+
+Options:
+
+* `rel_paths`: store paths relative to the CSV location
+* `caching=True`: keeps data in memory and overwrites existing rows
+* `caching=False`: appends rows (duplicates possible)
+
+---
+
+### JSON Collections
+
+```python
+collection = ggset.create_bulk_json_collection(
+    "annotations.json",
+    layer=2,
+    rel_paths=False
+)
+
+collection.write(file, {"label": 1})
+data = collection.read_dict()
+```
+
+JSON collections store data as:
+
+```json
+{
+  "path/to/file": { ... }
+}
+```
+
+---
+
+## File API
+
+Each file is represented by a `GGFile` object.
+
+### Reading
+
+```python
+file.read_image()
+file.read_json()
+file.read_yaml()
+file.read_text()
+file.read_dataframe()
+file.read_np_array()
+```
+
+There are also helpers for simple values:
+
+```python
+file.read_single_int()
+file.read_single_float()
+file.read_single_bool()
+```
+
+---
+
+### Writing
+
+```python
+file.write_json(data)
+file.write_text("hello")
+file.write_dataframe(df)
+file.write_image(img)
+file.write_np_array(arr)
+```
+
+Files are created automatically if they do not exist.
+
+---
+
+## Directory Navigation
+
+You can navigate the dataset structure explicitly:
+
+```python
+root = GGSet("dataset")
+
+train_dir = root.get_sub_dir("train")
+images_dir = train_dir.get_sub_dir("images")
+
+file = images_dir.get_file("sample1.png")
+```
+
+Useful helpers:
+
+* `exists()`
+* `touch()` (create directories or files)
+* `file_count()`
+* `iterate_layer(level)`
+
+---
+
+## Iteration Behavior
+
+`iterate()` adapts to the dataset structure:
+
+```python
+ggset.iterate(data_type="images")
+ggset.iterate(filter_endings=(".png",))
+```
+
+It will:
+
+* Traverse directories recursively
+* Respect `data_type_level`
+* Filter by file endings if provided
+
+---
+
+## Filtering Directories
+
+You can restrict traversal:
+
+```python
+ggset.add_filter_allow_only(level=1, "train", "test")
+ggset.add_filter_exclude(level=2, "tmp")
+```
+
+Filters apply per directory level.
+
+---
+
+## Notes
+
+* Paths are resolved lazily; the directory tree is not built upfront
+* Non-existing files are represented and can be written later
+* Bulk collections can target a different output dataset via `bulk_files_root`
+* This library is designed to be flexible and lightweight, without enforcing a specific dataset structure by relying extensively on the Strategy pattern. (See [example-usage.ipynb](example-usage.ipynb) for more details.)
 
 ---
 
 ## Summary
 
-GGSet abstracts away dataset structure complexity and provides:
+GGSet is useful when:
 
-* Unified iteration over files
-* Flexible metadata handling (CSV / JSON)
-* Robust mapping between data and labels
-* Support for complex real-world dataset layouts
+* Your dataset is not flat
+* Data and labels are stored separately
+* You need consistent file mapping
+* You want lightweight metadata handling without a full database
+
+It keeps everything file-based while still providing structure.

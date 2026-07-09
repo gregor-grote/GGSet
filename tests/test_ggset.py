@@ -172,7 +172,7 @@ class TestGGDir(unittest.TestCase):
         self.assertEqual(annotation_file.read_text(), "annotation for file1")
         self.assertEqual(annotation_file.rel_path.parent.name, "labels")
         self.assertEqual(annotation_file.rel_path.name, "file1.txt")
-        self.assertEqual(len(ggset.sub_dirs), 2)
+        self.assertEqual(len(ggset.get_sub_dirs()), 2)
 
     def test_write_file(self):
         small_ggset_root = Path(self._tmpdir.name) / "small_GGDir"
@@ -195,7 +195,7 @@ class TestGGDir(unittest.TestCase):
         self.ggset_3.add_filter_allow_only(2, "db1")
         r = list(self.ggset_3.iterate("data"))
         self.assertEqual(len(r), 8)
-        self.ggset_3.filters.clear()
+        self.ggset_3.dirs_strategy.filters.clear()  # type: ignore
 
     def test_bulk_json_writer(self):
         small_ggset_root = Path(self._tmpdir.name) / "small_GGDir_json"
@@ -594,6 +594,7 @@ class TestGGDir(unittest.TestCase):
         self.assertFalse((source_root_resolved / "test" / "annot.csv").exists())
 
         # iter() must yield GGFiles from the source set
+        annot.refresh()
         with source.create_bulk_csv_collection("annot.csv", layer=2, bulk_files_root=annot) as bulk:
             items = list(bulk)
         self.assertEqual(len(items), 3)
@@ -632,6 +633,7 @@ class TestGGDir(unittest.TestCase):
         self.assertEqual(row["value"], 10)
 
         # iter() must yield GGFiles from the source set
+        annot.refresh()
         items = list(bulk)
         self.assertEqual(len(items), 2)
         for src_file, data in items:

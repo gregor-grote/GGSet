@@ -42,6 +42,11 @@ __all__ = [
     "GGDir",
     "GGFile",
     "GGSet",
+    "GetSubDirsStrategy",
+    "DefaultSubdirsStrategy",
+    "FilteredSubdirsStrategy",
+    "GetSubFilesStrategy",
+    "DefaultSubfilesStrategy",
     "GGNotFoundError",
     "GGDirNotFoundError",
     "GGFileNotFoundError",
@@ -79,6 +84,8 @@ class GGDir:
         parent: GGDir | None = None,
         data_type_level: int = -1,
         level: int = 0,
+        get_sub_dirs_strategy: GetSubDirsStrategy | None = None,
+        get_sub_files_strategy: GetSubFilesStrategy | None = None,
     ) -> None:
         """Initialize a GGDir node.
         Children are not populated until ``sub_dirs`` is accessed, allowing for lazy loading of the directory tree.
@@ -95,14 +102,35 @@ class GGDir:
         ), "Only the root node can have level 0, and it must be an instance of GGSet."
         input_path = Path(path)
         self.parent: GGDir = parent  # type: ignore
-        self._sub_dirs: Optional[List[GGDir]] = None
+        self._all_sub_dirs: Optional[List[GGDir]] = None
         self.data_type_level = data_type_level
         self.level = level
         if self.parent is None:
             self.rel_path = Path()
         else:
             self.rel_path = input_path
-        self._build()
+        self.dirs_strategy: Optional[GetSubDirsStrategy] = get_sub_dirs_strategy
+        self.sub_files_strategy: Optional[GetSubFilesStrategy] = get_sub_files_strategy
+
+    def _get_dirs_strategy(self) -> GetSubDirsStrategy:
+        if self.dirs_strategy is not None:
+            return self.dirs_strategy
+        if self.parent is not None:
+            return self.parent._get_dirs_strategy()
+        else:
+            return DefaultSubdirsStrategy()
+
+    def _get_sub_files_strategy(self) -> GetSubFilesStrategy:
+        if self.sub_files_strategy is not None:
+            return self.sub_files_strategy
+        if self.parent is not None:
+            return self.parent._get_sub_files_strategy()
+        else:
+            return DefaultSubfilesStrategy()
+
+    def refresh(self):
+        """Clear cached subdirectories and subfiles, forcing a re-read from disk on next access."""
+        self._all_sub_dirs = None
 
     @property
     def name(self) -> str:
@@ -116,19 +144,15 @@ class GGDir:
         """Return the absolute filesystem path for this node."""
         return self.root.root_path / self.rel_path
 
-    @property
-    def sub_dirs(self) -> List[GGDir]:
-        """Return the list of subdirectory nodes."""
-        if self._sub_dirs is None:
-            return self._build()
-        return self._sub_dirs
-
-    def _build(self) -> List[GGDir]:
-        """Populate ``sub_dirs`` with subdirectory nodes."""
+    def get_all_sub_dirs(self) -> List[GGDir]:
+        """Return all direct child nodes, ignoring any filters."""
+        if self._all_sub_dirs is not None:
+            return self._all_sub_dirs
         if not self.abs_path.exists():
             return []
         if not self.abs_path.is_dir():
             raise ValueError(f"Expected '{self.abs_path}' to be a directory, but it is a file.")
+        r = []
         for item in self.abs_path.iterdir():
             if item.is_dir():
                 child = GGDir(
@@ -137,12 +161,26 @@ class GGDir:
                     data_type_level=self.data_type_level,
                     level=self.level + 1,
                 )
-                if self._sub_dirs is None:
-                    self._sub_dirs = []
-                self._sub_dirs.append(child)
-        if self._sub_dirs is None:
-            self._sub_dirs = []
-        return self._sub_dirs
+                r.append(child)
+        self._all_sub_dirs = r
+        return r
+
+    def get_sub_dirs(self) -> List[GGDir]:
+        """Return direct child nodes using the specified subdirectory retrieval strategy."""
+        return self._get_dirs_strategy().get_subdirs(self)
+
+    def get_all_sub_files(self) -> List[GGFile]:
+        """Return all direct child files, ignoring any filters."""
+        if not self.abs_path.exists():
+            return []
+        if not self.abs_path.is_dir():
+            raise ValueError(f"Expected '{self.abs_path}' to be a directory, but it is a file.")
+        r = []
+        for item in self.abs_path.iterdir():
+            if item.is_file():
+                child = GGFile(self, item.name)
+                r.append(child)
+        return r
 
     def get_sub_dir(self, name: str | Path) -> GGDir:
         """Return a direct child node by name.
@@ -158,7 +196,7 @@ class GGDir:
             further_parts = "/".join(name_parts[1:])
         else:
             further_parts = None
-        for sub_dir in self.sub_dirs:
+        for sub_dir in self.get_sub_dirs():
             if sub_dir.name == name:
                 if further_parts:
                     return sub_dir.get_sub_dir(further_parts)
@@ -173,7 +211,9 @@ class GGDir:
             level=self.level + 1,
         )
         if new_child.exists():
-            self.sub_dirs.append(new_child)
+            if self._all_sub_dirs is not None:
+                self._all_sub_dirs.append(new_child)
+
         if further_parts:
             return new_child.get_sub_dir(further_parts)
         return new_child
@@ -205,23 +245,13 @@ class GGDir:
             if item.is_file():
                 file_paths.append(item)
         if rec:
-            for sub_dir in self.filtered_sub_dirs:
+            for sub_dir in self.get_sub_dirs():
                 file_paths.extend(sub_dir.all_files_paths())
         return file_paths
 
-    @property
-    def filtered_sub_dirs(self) -> List[GGDir]:
-        """Return direct child nodes that pass the active filters."""
-        filters = self.root.filters.get(self.level + 1, None)
-        if filters is None:
-            return self.sub_dirs
-        allowed = []
-        for sub_dir in self.sub_dirs:
-            if all(sub_dir.name != f[1:] for f in filters if f.startswith("!")) and any(
-                sub_dir.name == f for f in filters if not f.startswith("!")
-            ):
-                allowed.append(sub_dir)
-        return allowed
+    def get_sub_files(self) -> List[GGFile]:
+        """Return direct child files using the specified subfile retrieval strategy."""
+        return self._get_sub_files_strategy().get_sub_files(self)
 
     @property
     def data_type_level_parent(self) -> GGDir:
@@ -414,7 +444,7 @@ class GGDir:
             return
 
         if self.data_type_level > 0 and data_type is None and self.level > self.data_type_level + 1:
-            for child in self.filtered_sub_dirs:
+            for child in self.get_sub_dirs():
                 yield from child.iterate(data_type, filter_endings, min_layer)
         elif self.data_type_level > 0 and data_type is not None and self.is_data_type_level_parent:
             if data_type is None:
@@ -423,11 +453,10 @@ class GGDir:
             yield from child.iterate(data_type, filter_endings, min_layer)
         else:
             if self.level >= min_layer:
-                for item in self.abs_path.iterdir():
-                    if item.is_file():
-                        if not filter_endings or item.suffix.lower() in filter_endings:
-                            yield GGFile(self, item.name)
-            for child in self.filtered_sub_dirs:
+                for item in self.get_sub_files():
+                    if not filter_endings or item.rel_path.suffix.lower() in filter_endings:
+                        yield item
+            for child in self.get_sub_dirs():
                 yield from child.iterate(data_type, filter_endings, min_layer)
 
     def iterate_layer(self, layer: int) -> Generator[GGDir, None, None]:
@@ -435,7 +464,7 @@ class GGDir:
         if self.level == layer:
             yield self
         else:
-            for child in self.filtered_sub_dirs:
+            for child in self.get_sub_dirs():
                 yield from child.iterate_layer(layer)
 
     def ancestor_at_level(self, target_level: int) -> GGDir:
@@ -458,31 +487,70 @@ class GGDir:
                 counted.
         """
         count = 0
-        for item in self.abs_path.iterdir():
-            if item.is_file() and (not filter_endings or item.suffix.lower() in filter_endings):
+        for item in self.get_sub_files():
+            if not filter_endings or item.rel_path.suffix.lower() in filter_endings:
                 count += 1
         if rec:
-            for sub_dir in self.filtered_sub_dirs:
+            for sub_dir in self.get_sub_dirs():
                 count += sub_dir.file_count(rec=True, filter_endings=filter_endings)
         return count
 
-    def print_tree(self, indent: str = "", indent_steps: int = 2, filtered_out: bool = False) -> None:
+    def print_tree(self, indent: str = "", indent_steps: int = 2) -> None:
         """Print the GGDir tree structure starting from this node."""
-        ending_counts = {}
-        for item in self.abs_path.iterdir():
-            if item.is_file() and len(item.suffix) > 0:
-                ending_counts[item.suffix.lower()] = ending_counts.get(item.suffix.lower(), 0) + 1
-        if filtered_out:
-            print(f"{indent}{self.name}/ (filtered out)")
-        else:
-            print(f"{indent}{self.name}/")
-        for ending, count in ending_counts.items():
+        all_files = set(f.file_name for f in self.get_all_sub_files())
+        filtered_files = set(f.file_name for f in self.get_sub_files())
+        filtered_out_files = all_files - filtered_files
+
+        all_dirs = set(d.name for d in self.get_all_sub_dirs())
+        filtered_dirs = set(d.name for d in self.get_sub_dirs())
+        filtered_out_dirs = all_dirs - filtered_dirs
+
+        filtered_file_extensions = {}
+        for f in filtered_files:
+            ext = Path(f).suffix.lower()
+            if len(ext) > 0:
+                filtered_file_extensions[ext] = filtered_file_extensions.get(ext, 0) + 1
+            else:
+                filtered_file_extensions["<no extension>"] = filtered_file_extensions.get("<no extension>", 0) + 1
+
+        filtered_out_extensions = {}
+        for f in filtered_out_files:
+            ext = Path(f).suffix.lower()
+            if len(ext) > 0:
+                filtered_out_extensions[ext] = filtered_out_extensions.get(ext, 0) + 1
+            else:
+                filtered_out_extensions["<no extension>"] = filtered_out_extensions.get("<no extension>", 0) + 1
+
+        print(f"{indent}{self.name}/")
+
+        for ending, count in filtered_file_extensions.items():
             print(f"{indent}  {ending}: {count}")
-        if len(ending_counts) > 0:
-            print()
-        for child in self.sub_dirs:
-            not_filtered = child.name in [c.name for c in self.filtered_sub_dirs]
-            child.print_tree(indent + " " * indent_steps, indent_steps, filtered_out=not not_filtered)
+        for ending, count in filtered_out_extensions.items():
+            print(f"{indent}  {ending}: {count} (filtered out)")
+
+        for d in filtered_dirs:
+            self.get_sub_dir(d).print_tree(indent + " " * indent_steps, indent_steps)
+        for d in filtered_out_dirs:
+            print(f"{indent}  {d}/ (filtered out)")
+
+        # for file in self.get_sub_files():
+        #     if len(file.rel_path.suffix) > 0:
+        #         ending_counts[file.rel_path.suffix.lower()] = ending_counts.get(file.rel_path.suffix.lower(), 0) + 1
+        #     else:
+        #         ending_counts["<no extension>"] = ending_counts.get("<no extension>", 0) + 1
+        # for d in self.get_all_sub_dirs():
+        #     all_dirs.add(d.name)
+        # else:
+        #     print(f"{indent}{self.name}/")
+        # for ending, count in ending_counts.items():
+        #     print(f"{indent}  {ending}: {count}")
+        # if len(ending_counts) > 0:
+        #     print()
+        # for child in self.get_sub_dirs():
+        #     child.print_tree(indent + " " * indent_steps, indent_steps)
+        #     all_dirs.discard(child.name)
+        # for remaining_dir in all_dirs:
+        #     print(f"{indent}  {remaining_dir}/ (filtered out)")
 
     def print_counts(
         self,
@@ -498,9 +566,9 @@ class GGDir:
         if self.level == level:
             count = self.file_count(rec=True, filter_endings=filter_endings)
             print(f"{indent}{self.name}/: {count} files")
-        elif len(self.filtered_sub_dirs) > 0:
+        elif len(self.get_sub_dirs()) > 0:
             print(f"{indent}{self.name}/")
-            for child in self.filtered_sub_dirs:
+            for child in self.get_sub_dirs():
                 child.print_counts(
                     level, filter_endings, print_on_no_children, indent + " " * indent_steps, indent_steps
                 )
@@ -579,11 +647,63 @@ class GGDir:
 class GGSet(GGDir):
     """Root GGDir specialization used as the main user entry point."""
 
-    filters: Dict[int, Tuple[str, ...]] = {}
-
-    def __init__(self, path: str | Path, data_type_level: int = -1) -> None:
+    def __init__(
+        self,
+        path: str | Path,
+        data_type_level: int = -1,
+        get_sub_dirs_strategy: GetSubDirsStrategy | None = None,
+        get_sub_files_strategy: GetSubFilesStrategy | None = None,
+    ) -> None:
         self.root_path = Path(path).resolve()
-        super().__init__(Path(), parent=None, data_type_level=data_type_level, level=0)
+        super().__init__(
+            Path(),
+            parent=None,
+            data_type_level=data_type_level,
+            level=0,
+            get_sub_dirs_strategy=get_sub_dirs_strategy,
+            get_sub_files_strategy=get_sub_files_strategy,
+        )
+        self.dirs_strategy = self.dirs_strategy or FilteredSubdirsStrategy()
+
+    def add_filter_allow_only(self, level: int, *allowed_dirs) -> None:
+        """Add a filter to only allow certain subdirectories at a given level.
+
+        Args:
+            level: Depth from the root node where the filter should be applied.
+            allowed_dirs: Iterable of directory names to allow at the specified level.
+        """
+        strat = self.dirs_strategy
+        if not isinstance(strat, FilteredSubdirsStrategy):
+            raise ValueError("Current subdirectory strategy does not support filtering.")
+        strat.filters[level] = tuple(allowed_dirs)
+
+    def add_filter_exclude(self, level: int, *excluded_dirs) -> None:
+        """Add a filter to exclude certain subdirectories at a given level.
+
+        Args:
+            level: Depth from the root node where the filter should be applied.
+            excluded_dirs: Iterable of directory names to exclude at the specified level.
+        """
+        strat = self.dirs_strategy
+        if not isinstance(strat, FilteredSubdirsStrategy):
+            raise ValueError("Current subdirectory strategy does not support filtering.")
+        strat.filters[level] = tuple([f"!{dir_name}" for dir_name in excluded_dirs])
+
+
+class GetSubDirsStrategy(ABC):
+    @abstractmethod
+    def get_subdirs(self, ggdir: GGDir) -> List[GGDir]:
+        """Return a list of subdirectories for the given GGDir."""
+        pass
+
+
+class DefaultSubdirsStrategy(GetSubDirsStrategy):
+    def get_subdirs(self, ggdir: GGDir) -> List[GGDir]:
+        return ggdir.get_all_sub_dirs()
+
+
+class FilteredSubdirsStrategy(GetSubDirsStrategy):
+    filters: Dict[int, Tuple[str, ...]] = {}
 
     def add_filter_allow_only(self, level: int, *allowed_dirs) -> None:
         """Add a filter to only allow certain subdirectories at a given level.
@@ -602,6 +722,31 @@ class GGSet(GGDir):
             excluded_dirs: Iterable of directory names to exclude at the specified level.
         """
         self.filters[level] = tuple([f"!{dir_name}" for dir_name in excluded_dirs])
+
+    def get_subdirs(self, ggdir: GGDir) -> List[GGDir]:
+        all_subdirs = ggdir.get_all_sub_dirs()
+        filters = self.filters.get(ggdir.level + 1, None)
+        if filters is None or len(filters) == 0:
+            return all_subdirs
+        allowed = []
+        for sub_dir in all_subdirs:
+            if all(sub_dir.name != f[1:] for f in filters if f.startswith("!")) and any(
+                sub_dir.name == f for f in filters if not f.startswith("!")
+            ):
+                allowed.append(sub_dir)
+        return allowed
+
+
+class GetSubFilesStrategy(ABC):
+    @abstractmethod
+    def get_sub_files(self, ggdir: GGDir) -> List[GGFile]:
+        """Return a list of subfiles for the given GGDir."""
+        pass
+
+
+class DefaultSubfilesStrategy(GetSubFilesStrategy):
+    def get_sub_files(self, ggdir: GGDir) -> List[GGFile]:
+        return ggdir.get_all_sub_files()
 
 
 TRUEISH_VALUES = {"true", "1", "yes", "y"}
@@ -798,12 +943,12 @@ class BulkFileResolverStrategy(ABC):
 
     @abstractmethod
     def resolve(self, file: GGFile, bulk_collection: "GGBulkCollection") -> GGFile:
-        """Resolve and return a bulk file instance for a given GGDir."""
+        """Resolve and return a bulk file instance for a given GGFile."""
         pass
 
     @abstractmethod
     def all_files(self, bulk_collection: "GGBulkCollection") -> List[GGFile]:
-        """Return a list of all GGFiles in the bulk collection."""
+        """Return a list of all BulkFile instances in the bulk collection."""
         pass
 
 
@@ -833,12 +978,12 @@ class KeyMappingStrategy(ABC):
 
     @abstractmethod
     def to_store_key(self, ref_file: GGFile, bulk_file: GGFile, bulk_collection: "GGBulkCollection") -> str:
-        """Return a unique key for a given reference file."""
+        """Return a unique key for a given reference file for a given bulk file."""
         pass
 
     @abstractmethod
-    def from_store_key(self, key: str, context_file: GGFile, bulk_collection: "GGBulkCollection") -> str:
-        """Return a GGFile corresponding to a given key."""
+    def from_store_key(self, key: str, bulk_file: GGFile, bulk_collection: "GGBulkCollection") -> str:
+        """Return the relative path from the `bulk_collection.data_root` corresponding to a given key from a given bulk file."""
         pass
 
 
@@ -848,7 +993,7 @@ class DefaultKeyMappingStrategy(KeyMappingStrategy):
     def to_store_key(self, ref_file: GGFile, bulk_file: GGFile, bulk_collection: "GGBulkCollection") -> str:
         return str(ref_file.rel_path)
 
-    def from_store_key(self, key: str, context_file: GGFile, bulk_collection: "GGBulkCollection") -> str:
+    def from_store_key(self, key: str, bulk_file: GGFile, bulk_collection: "GGBulkCollection") -> str:
         return key
 
 
@@ -894,7 +1039,8 @@ class BulkStorageStrategy(ABC):
 
     @abstractmethod
     def flush(self, bulk_collection: "GGBulkCollection") -> None:
-        """Flush any buffered data to the bulk file."""
+        """Flush any buffered data to the bulk file.
+        Subclasses should also empty any internal buffers to free memory after flushing."""
         pass
 
     def iterate(
@@ -934,6 +1080,7 @@ class GGBulkCollection:
         for bulk_file in self.bulk_file_resolver_strategy.all_files(self):
             df = self.storage_strategy.read_dataframe(bulk_file, self)
             all_dataframes.append(df)
+            self.flush()
         if len(all_dataframes) == 0:
             return pd.DataFrame()
         return pd.concat(all_dataframes, ignore_index=True)
@@ -944,6 +1091,7 @@ class GGBulkCollection:
         for bulk_file in self.bulk_file_resolver_strategy.all_files(self):
             data = self.storage_strategy.read_dict(bulk_file, self)
             all_data.update(data)
+            self.flush()
         return all_data
 
     def get_existing_files_set(self) -> set[str]:
@@ -952,6 +1100,7 @@ class GGBulkCollection:
         for bulk_file in self.bulk_file_resolver_strategy.all_files(self):
             keys = self.storage_strategy.get_existing_files_set(bulk_file, self)
             all_keys.update(keys)
+            self.flush()
         return all_keys
 
     def read_for_file(self, ref_file: GGFile) -> Optional[Dict[str, Any]]:
@@ -973,14 +1122,14 @@ class GGBulkCollection:
         """Iterate over all key-value pairs in the bulk collection."""
         for bulk_file in self.bulk_file_resolver_strategy.all_files(self):
             yield from self.storage_strategy.iterate(bulk_file, self)
-            self.storage_strategy.flush(self)  # to prevent memory issues when iterating over large collections
+            self.storage_strategy.flush(self)
 
     def __iter__(self) -> Generator[Tuple[GGFile, Dict[str, Any]], None, None]:
         return self.iterate()
 
 
 class JsonStorageStrategy(BulkStorageStrategy):
-    """Storage strategy for bulk collections using JSON files."""
+    """Storage strategy for bulk collections using JSON files with the file structure: `{store_key: data_dict}`."""
 
     def __init__(self, key_resolver: KeyMappingStrategy):
         self.key_resolver = key_resolver
