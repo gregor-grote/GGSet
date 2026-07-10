@@ -278,6 +278,9 @@ Note, that when creating a custom `GetSubDirsStrategy`, the filters are not appl
 * Non-existing files and their parent directories are only created when writing or explicitly when calling `touch()`
 * Bulk collections can target a different output dataset via `bulk_files_root`, so you can save the annotations to a different location than the data files.
 * This library is designed to be flexible and lightweight, without enforcing a specific dataset structure by relying extensively on the Strategy pattern. (See [example-usage.ipynb](example-usage.ipynb) for more details.)
+* All subdirs are cached (after requested the first time) but the filters are applied every time you call `get_sub_dirs()`. To get all subdirs without filters, use `get_all_sub_dirs()`.
+* File on the other hand are not cached. `.get_all_sub_files()` and `.get_sub_files()` will always read the directory contents from disk. 
+* Use `.refresh()` to clear the cache and re-read the directory contents from disk. Note that Custom `GetSubDirsStrategy` and `GetSubFilesStrategy` on lower levels will need to be added again after a refresh, as they are not persisted.
 
 ---
 
@@ -285,9 +288,9 @@ Note, that when creating a custom `GetSubDirsStrategy`, the filters are not appl
 
 GGSet is useful when:
 
-* Your dataset is not flat
-* Data and labels are stored separately
+* Your dataset is not flat (But you can also use it for flat datasets)
+* Data and labels are stored separately (But you can also use it for datasets where they are stored together)
 * You need consistent file mapping
-* You want lightweight metadata handling without a full database
+* You want consistent metadata handling
 
 It keeps everything file-based while still providing structure.
