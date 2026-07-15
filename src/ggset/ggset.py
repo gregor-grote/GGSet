@@ -313,7 +313,7 @@ class GGDir:
         return GGFile(self, filename)
 
     def get_corresponding_file(
-        self, cur_file: Path, data_type: str, extension: str, target_set: GGSet | None = None
+        self, cur_file: Path, data_type: str, extension: str, target_set: GGDir | None = None
     ) -> GGFile:
         """Map a file to its counterpart in another type separation branch.
 
@@ -325,7 +325,7 @@ class GGDir:
             cur_file: Source file path.
             data_type: Target top-level type branch name.
             extension: New suffix, including leading dot.
-            target_set: Optional GGSet to use as the root for the output path.
+            target_set: Optional GGDir to use as the root for the output path.
                 When given, the output file is placed in this set instead of
                 the source set, mirroring the same relative structure.
         """
@@ -339,7 +339,7 @@ class GGDir:
 
         return final_GGDir.get_file(cur_file.with_suffix(extension).name)
 
-    def get_corresponding_dir(self, cur_file: Path, data_type: str, target_set: GGSet | None = None) -> GGDir:
+    def get_corresponding_dir(self, cur_file: Path, data_type: str, target_set: GGDir | None = None) -> GGDir:
         """Map a file to its counterpart type branch.
 
         The relative path below the current type-level node is preserved while switching the first branch to ``data_type``.
@@ -347,7 +347,7 @@ class GGDir:
         Args:
             cur_file: Source file path.
             data_type: Target top-level type branch name.
-            target_set: Optional GGSet to use as the root for the output path.
+            target_set: Optional GGDir to use as the root for the output path.
                 When given, the output directory is placed in this set instead
                 of the source set, mirroring the same relative structure.
         """
@@ -362,7 +362,7 @@ class GGDir:
         return final_GGDir.get_sub_dir(final_name)
 
     def get_corresponding_file_for_this_dir(
-        self, data_type: str, extension: str, target_set: GGSet | None = None
+        self, data_type: str, extension: str, target_set: GGDir | None = None
     ) -> GGFile:
         """Map this directory to a file in another type branch with the same relative path.
 
@@ -373,7 +373,7 @@ class GGDir:
         Args:
             data_type: Target top-level type branch name.
             extension: New suffix, including leading dot.
-            target_set: Optional GGSet to use as the root for the output path.
+            target_set: Optional GGDir to use as the root for the output path.
                 When given, the output file is placed in this set instead of
                 the source set, mirroring the same relative structure.
         """
@@ -796,40 +796,40 @@ class GGFile:
         self.abs_path.touch(exist_ok=True)
         return self
 
-    def get_corresponding_file(self, data_type: str, extension: str, target_set: GGSet | None = None) -> GGFile:
+    def get_corresponding_file(self, data_type: str, extension: str, target_set: GGDir | None = None) -> GGFile:
         """Resolve this file's counterpart in another data branch.
 
         Args:
             data_type: Target top-level type branch name.
             extension: New suffix, including leading dot.
-            target_set: Optional GGSet to resolve the output file in.
+            target_set: Optional GGDir to resolve the output file in.
         """
         return self.ggdir.get_corresponding_file(self.abs_path, data_type, extension, target_set=target_set)
 
-    def get_corresponding_dir(self, data_type: str, target_set: GGSet | None = None) -> GGDir:
+    def get_corresponding_dir(self, data_type: str, target_set: GGDir | None = None) -> GGDir:
         """Resolve this file's dataset branch counterpart.
 
         Args:
             data_type: Target top-level type branch name.
-            target_set: Optional GGSet to resolve the output directory in.
+            target_set: Optional GGDir to resolve the output directory in.
         """
         return self.ggdir.get_corresponding_dir(self.abs_path, data_type, target_set=target_set)
 
-    def get_corresponding_file_in_same_dir(self, extension: str, target_set: GGSet | None = None) -> GGFile:
+    def get_corresponding_file_in_same_dir(self, extension: str, target_set: GGDir | None = None) -> GGFile:
         """Resolve this file's counterpart in the same directory but with a different extension.
 
         Args:
             extension: New suffix, including leading dot.
-            target_set: Optional GGSet to resolve the output file in.
+            target_set: Optional GGDir to resolve the output file in.
         """
         target_dir = self.ggdir if target_set is None else target_set.get_sub_dir(self.ggdir.rel_path)
         return target_dir.get_file(self.abs_path.with_suffix(extension).name)
 
-    def get_corresponding_dir_in_same_dir(self, target_set: GGSet | None = None) -> GGDir:
+    def get_corresponding_dir_in_same_dir(self, target_set: GGDir | None = None) -> GGDir:
         """Resolve this file's counterpart directory in the same directory with the same name as the file (without extension).
 
         Args:
-            target_set: Optional GGSet to resolve the output directory in.
+            target_set: Optional GGDir to resolve the output directory in.
         """
         target_dir = self.ggdir if target_set is None else target_set.get_sub_dir(self.ggdir.rel_path)
         return target_dir.get_sub_dir(self.abs_path.with_suffix("").name)
@@ -1010,32 +1010,35 @@ class RelativePathKeyMappingStrategy(KeyMappingStrategy):
 class BulkStorageStrategy(ABC):
     """Abstract base class for defining storage strategies for bulk collections."""
 
-    @abstractmethod
     def write(self, ref_file: GGFile, bulk_file: GGFile, data: Any, bulk_collection: "GGBulkCollection") -> None:
         """Write data for a given reference file."""
-        pass
+        raise NotImplementedError("Writing data is not implemented for this storage strategy.")
 
-    @abstractmethod
     def read_dataframe(self, bulk_file: GGFile, bulk_collection: "GGBulkCollection") -> pd.DataFrame:
-        """Read data for a given bulk file and return it as a pandas DataFrame."""
-        pass
+        """Read data for a given bulk file and return it as a pandas DataFrame.
+        The filenames are expected to be in a column named 'filename'. and the path shall be relative to `bulk_collection.data_root`.
+        """
+        d = self.read_dict(bulk_file, bulk_collection)
+        l = [{"filename": k, **v} for k, v in d.items()]
+        return pd.DataFrame(l)
 
-    @abstractmethod
     def read_dict(self, bulk_file: GGFile, bulk_collection: "GGBulkCollection") -> Dict[str, Any]:
-        """Read data for a given bulk file and return it as a dictionary."""
-        pass
+        """Read data for a given bulk file and return it as a dictionary.
+        The keys are expected to be the relative paths of the reference files from `bulk_collection.data_root`.
+        """
+        df = self.read_dataframe(bulk_file, bulk_collection)
+        return df.set_index("filename").to_dict(orient="index")  # type: ignore
 
-    @abstractmethod
     def get_existing_files_set(self, bulk_file: GGFile, bulk_collection: "GGBulkCollection") -> set[str]:
         """Return a set of existing reference file keys in the bulk file."""
-        pass
+        return set(self.read_dict(bulk_file, bulk_collection).keys())
 
-    @abstractmethod
     def read_for_file(
         self, ref_file: GGFile, bulk_file: GGFile, bulk_collection: "GGBulkCollection"
     ) -> Optional[Dict[str, Any]]:
         """Read data for a specific reference file from the corresponding bulk file."""
-        pass
+        d = self.read_dict(bulk_file, bulk_collection)
+        return d.get(ref_file.rel_path.relative_to(bulk_collection.data_root.rel_path).as_posix(), None)
 
     @abstractmethod
     def flush(self, bulk_collection: "GGBulkCollection") -> None:
@@ -1126,6 +1129,11 @@ class GGBulkCollection:
 
     def __iter__(self) -> Generator[Tuple[GGFile, Dict[str, Any]], None, None]:
         return self.iterate()
+
+    def __contains__(self, item):
+        if isinstance(item, GGFile):
+            return self.read_for_file(item) is not None
+        return False
 
 
 class JsonStorageStrategy(BulkStorageStrategy):
@@ -1330,7 +1338,6 @@ class CsvCachingStorageStrategy(CsvStorageStrategy):
         store_key = self.key_resolver.to_store_key(ref_file, bulk_file, bulk_collection)
         new_row = {self.filename_col_name: store_key, **data}
         if store_key in df[self.filename_col_name].values:
-            # df.loc[df[self.filename_col_name] == store_key, list(data.keys())] = list(data.values())
             filt = df[self.filename_col_name] == store_key
             for key, value in data.items():
                 df.loc[filt, key] = value

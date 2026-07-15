@@ -821,6 +821,30 @@ class TestGGDir(unittest.TestCase):
         self.assertEqual(data["value"], 1)
         self.assertEqual(data["value2"], 100)
 
+    def test__contains__in_bulk_collection(self):
+        """Test that the __contains__ method works correctly in bulk collections."""
+        small_ggset_root = Path(self._tmpdir.name) / "small_GGDir_contains"
+        _write(small_ggset_root / "train" / "data" / "file1.txt", "1")
+        _write(small_ggset_root / "train" / "data" / "file2.txt", "2")
+        ggset = GGSet(small_ggset_root, data_type_level=2)
+        with ggset.create_bulk_json_collection("bulk_data.json", layer=2, rel_paths=True) as bulk:
+            file = ggset.get_file("train/data/file1.txt")
+            file2 = ggset.get_file("train/data/file2.txt")
+            bulk.write(file, {"value": 1})
+
+            self.assertIn(file, bulk)
+            self.assertNotIn(file2, bulk)
+
+            bulk.flush()
+
+            self.assertIn(file, bulk)
+            self.assertNotIn(file2, bulk)
+
+            all_files = list(bulk)
+            self.assertEqual(len(all_files), 1)
+            self.assertEqual(all_files[0][0].rel_path.as_posix(), file.rel_path.as_posix())
+            self.assertEqual(all_files[0][1], {"value": 1})
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -20,14 +20,6 @@ class Dlc2021BulkStorageStrategy(BulkStorageStrategy):
     def __init__(self):
         self._cache: Dict[str, Dict[str, Dict]] = {}
 
-    def write(self, ref_file: GGFile, bulk_file: GGFile, data: Any, bulk_collection: GGBulkCollection) -> None:
-        raise NotImplementedError("This Strategy is only for reading.")
-
-    def read_dataframe(self, bulk_file: GGFile, bulk_collection: GGBulkCollection) -> pd.DataFrame:
-        d = self.read_dict(bulk_file, bulk_collection)
-        l = [{"filename": k, **v} for k, v in d.items()]
-        return pd.DataFrame(l)
-
     def read_dict(self, bulk_file: GGFile, bulk_collection: GGBulkCollection) -> Dict[str, Any]:
         if bulk_file.rel_path.as_posix() in self._cache:
             return self._cache[bulk_file.rel_path.as_posix()]
@@ -42,9 +34,6 @@ class Dlc2021BulkStorageStrategy(BulkStorageStrategy):
             r[p.as_posix()] = value
         self._cache[bulk_file.rel_path.as_posix()] = r
         return r
-
-    def get_existing_files_set(self, bulk_file: GGFile, bulk_collection: GGBulkCollection) -> set[str]:
-        return set(self.read_dict(bulk_file, bulk_collection).keys())
 
     def read_for_file(
         self, ref_file: GGFile, bulk_file: GGFile, bulk_collection: GGBulkCollection
