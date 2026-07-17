@@ -11,9 +11,7 @@ requires-python = ">=3.10"
 authors = [{ name = "Gregor Grote" }]
 dependencies = [
 	"numpy>=1.0",
-	"opencv-python>=2.0",
 	"pandas>=2.0",
-	"PyYAML>=6.0",
 ]
 
 [project.urls]

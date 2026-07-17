@@ -30,13 +30,12 @@ from typing import (
 )
 import os
 from pathlib import Path
-import cv2
 import json
-import yaml
 import csv
 import pandas as pd
 from abc import ABC, abstractmethod
 import numpy as np
+import json
 
 __all__ = [
     "GGDir",
@@ -533,25 +532,6 @@ class GGDir:
         for d in filtered_out_dirs:
             print(f"{indent}  {d}/ (filtered out)")
 
-        # for file in self.get_sub_files():
-        #     if len(file.rel_path.suffix) > 0:
-        #         ending_counts[file.rel_path.suffix.lower()] = ending_counts.get(file.rel_path.suffix.lower(), 0) + 1
-        #     else:
-        #         ending_counts["<no extension>"] = ending_counts.get("<no extension>", 0) + 1
-        # for d in self.get_all_sub_dirs():
-        #     all_dirs.add(d.name)
-        # else:
-        #     print(f"{indent}{self.name}/")
-        # for ending, count in ending_counts.items():
-        #     print(f"{indent}  {ending}: {count}")
-        # if len(ending_counts) > 0:
-        #     print()
-        # for child in self.get_sub_dirs():
-        #     child.print_tree(indent + " " * indent_steps, indent_steps)
-        #     all_dirs.discard(child.name)
-        # for remaining_dir in all_dirs:
-        #     print(f"{indent}  {remaining_dir}/ (filtered out)")
-
     def print_counts(
         self,
         level: int,
@@ -837,13 +817,15 @@ class GGFile:
     def read_image(self) -> Any:
         """Read an image file with OpenCV.
 
-        Supported suffixes: ``.jpg``, ``.jpeg``, ``.png``, ``.bmp``.
-
         Raises:
             ValueError: If the file extension is not a supported image type.
         """
-        if self.abs_path.suffix.lower() not in [".jpg", ".jpeg", ".png", ".bmp"]:
-            raise ValueError(f"File '{self.abs_path}' is not a supported image format.")
+        try:
+            import cv2
+        except ImportError:
+            raise ImportError(
+                "OpenCV is required to read image files. Please install it with 'pip install opencv-python'."
+            )
         return cv2.imread(str(self.abs_path))
 
     def read_text(self) -> str:
@@ -891,6 +873,10 @@ class GGFile:
 
     def read_yaml(self) -> Dict[str, Any]:
         """Parse the file content as YAML using ``yaml.safe_load``."""
+        try:
+            import yaml
+        except ImportError:
+            raise ImportError("PyYAML is required to read YAML files. Please install it with 'pip install pyyaml'.")
         return yaml.safe_load(self.read_text())
 
     def read_dataframe(self) -> pd.DataFrame:
@@ -909,17 +895,29 @@ class GGFile:
     def write_image(self, image: Any) -> None:
         """Write an image to the file using OpenCV."""
         self.touch()
+        try:
+            import cv2
+        except ImportError:
+            raise ImportError(
+                "OpenCV is required to read image files. Please install it with 'pip install opencv-python'."
+            )
         cv2.imwrite(str(self.abs_path), image)
 
-    def write_json(self, data: Dict[str, Any]) -> None:
+    def write_json(self, data: Dict[str, Any], indent: int | str | None = 4) -> None:
         """Write a dictionary to the file as JSON."""
+        j = json.dumps(data, indent=indent)
         self.touch()
-        self.write_text(json.dumps(data, indent=4))
+        self.write_text(j)
 
     def write_yaml(self, data: Dict[str, Any]) -> None:
         """Write a dictionary to the file as YAML."""
+        try:
+            import yaml
+        except ImportError:
+            raise ImportError("PyYAML is required to write YAML files. Please install it with 'pip install pyyaml'.")
+        y = yaml.safe_dump(data)
         self.touch()
-        self.write_text(yaml.dump(data))
+        self.write_text(y)
 
     def write_dataframe(self, df: pd.DataFrame) -> None:
         """Write a pandas DataFrame to the file as CSV."""
@@ -1123,9 +1121,10 @@ class GGBulkCollection:
 
     def iterate(self) -> Generator[Tuple[GGFile, Dict[str, Any]], None, None]:
         """Iterate over all key-value pairs in the bulk collection."""
+        self.flush()
         for bulk_file in self.bulk_file_resolver_strategy.all_files(self):
             yield from self.storage_strategy.iterate(bulk_file, self)
-            self.storage_strategy.flush(self)
+            self.flush()
 
     def __iter__(self) -> Generator[Tuple[GGFile, Dict[str, Any]], None, None]:
         return self.iterate()
