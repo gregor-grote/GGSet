@@ -12,23 +12,20 @@ This module provides a suite of classes for structured dataset management:
 
 from __future__ import annotations
 
-from io import TextIOWrapper
+try:
+    from typing import Self
+except ImportError:
+    from typing_extensions import Self
+
 from typing import (
     Any,
     Dict,
     Iterable,
-    Iterator,
     List,
     Optional,
     Generator,
-    Self,
-    Set,
     Tuple,
-    Union,
-    TypeVar,
-    Generic,
 )
-import os
 from pathlib import Path
 import json
 import csv
