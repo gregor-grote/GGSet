@@ -384,6 +384,15 @@ class GGDir:
         filename = rel_path.parts[-1] + extension
         return final_GGDir.get_file(filename)
 
+    def get_corresponding_file_for_this_dir_in_same_dir(
+        self, extension: str, target_set: GGDir | None = None
+    ) -> GGFile:
+        """Map this directory to a file in the same directory with the same relative path."""
+        tf = self.parent.get_file(self.name + extension)
+        if target_set is not None:
+            return target_set.get_file(tf.rel_path)
+        return tf
+
     @property
     def root(self) -> GGSet:
         """Return the root node of the current GGDir tree."""
